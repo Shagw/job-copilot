@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# Secrets & local data
+.env
+backend/storage/*
+!backend/storage/.gitkeep
+
+# Node
+node_modules/
+dist/
+
+# OS
+.DS_Store
+
+# Playwright
+frontend/e2e-artifacts/
