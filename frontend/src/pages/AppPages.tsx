@@ -142,7 +142,7 @@ export function NewJobPage() {
         {mode === 'text' ? (
           <Field label="Job description" hint="Paste the full posting (at least 50 characters).">
             {(id, hint) => (
-              <textarea id={id} aria-describedby={hint} rows={14} minLength={50} maxLength={20000} required
+              <textarea id={id} aria-describedby={hint} rows={14} minLength={50} maxLength={100000} required
                 value={text} onChange={(e) => setText(e.target.value)} />
             )}
           </Field>

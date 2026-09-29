@@ -322,3 +322,13 @@ def test_json_generation_failure_tries_next_slot():
     llm, _, _, calls = make_llm({("A", "big"): [err]})
     assert llm.chat(MSG, response_format={"type": "json_object"}).message.content == "B/big"
     assert calls == [("A", "big"), ("B", "big")]
+
+
+def test_unwanted_tool_call_tries_next_slot():
+    """Groq 400 tool_use_failed: model called a tool with tool_choice=none (seen live on the Fit step)."""
+    err = api_error(groq.BadRequestError, 400,
+                    "Error code: 400 - {'error': {'message': 'Tool choice is none, but model called a tool', "
+                    "'code': 'tool_use_failed'}}")
+    llm, _, _, calls = make_llm({("A", "big"): [err]})
+    assert llm.chat(MSG, tool_choice="none").message.content == "B/big"
+    assert calls == [("A", "big"), ("B", "big")]

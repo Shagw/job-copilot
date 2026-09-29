@@ -112,7 +112,11 @@ export const api = {
     id: number,
     changes: Partial<{ parsed_job: ParsedJob; tailored_resume: string; cover_letter: string; status: Status }>,
   ) => request<JobSession>(`/sessions/${id}`, { method: 'PATCH', body: JSON.stringify(changes) }),
-  exportUrl: (id: number, kind: 'resume' | 'cover-letter') => `${BASE}/sessions/${id}/export/${kind}`,
+  exportUrl: (id: number, kind: 'resume' | 'cover-letter', format: 'docx' | 'pdf' = 'docx') =>
+    `${BASE}/sessions/${id}/export/${kind}` + (format === 'pdf' ? '?format=pdf' : ''),
+  /** Inline PDF for the in-app preview. `version` busts the browser cache after a save. */
+  previewUrl: (id: number, kind: 'resume' | 'cover-letter', version: number) =>
+    `${BASE}/sessions/${id}/export/${kind}?format=pdf&inline=true&v=${version}`,
 
   // ---- admin ----
   llmStatus: () => request<LlmSlot[]>('/admin/llm-status'),

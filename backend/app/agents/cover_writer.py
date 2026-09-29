@@ -11,10 +11,11 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
-from app.agents.base import AgentError, extract_tagged, run_agent
+from app.agents.base import AgentError, extract_tagged, has_tool_markup, run_agent
 from app.agents.cover_critic import critique, lint_letter
 from app.agents.fit_scorer import FitResult
 from app.agents.job_parser import ParsedJob
+from app.agents.shorten import char_budget, shorten
 from app.agents.tools import search_experience_tool
 from app.llm.groq_client import LLMClient
 from app.rag.store import ResumeIndex
@@ -36,6 +37,7 @@ class CoverLetterReport(BaseModel):
     remaining_issues: list[str]
     suggestions: list[str]
     history: list[RoundSummary]
+    note: str | None = None  # e.g. the resume was too long and was shortened for the AI
 
 
 SYSTEM = """You are the Cover Letter Writer agent in a job-application assistant.
@@ -96,8 +98,10 @@ def write_cover_letter(
     Grounding checks use the original + the user-approved tailored text."""
     source = f"{original_resume}\n\n{resume}" if resume != original_resume else original_resume
     keywords = job.keywords or job.must_have
-    base = _base_message(job, resume, fit, instructions)
-    tools = [search_experience_tool(index, user_id)]
+    # Room for the job summary, a previous draft + feedback, and tool results; long resumes are shortened.
+    overhead = len(SYSTEM) + len(_base_message(job, "", fit, instructions)) + 3500 + 4000
+    fitted = shorten(resume, char_budget(llm, 2500, overhead), keywords)
+    base = _base_message(job, fitted.text, fit, instructions)
 
     letter: str | None = None
     history: list[RoundSummary] = []
@@ -113,10 +117,13 @@ def write_cover_letter(
             user = (f"{base}\n\nYour previous draft:\n<letter>\n{letter}\n</letter>\n\n"
                     f"A hiring manager reviewed it. Revise the letter to fix ALL of this feedback:\n{feedback}")
 
+        tools = [search_experience_tool(index, user_id)]  # fresh per round: each round has a new history
         run = run_agent(llm, system=SYSTEM, user=user, tools=tools,
                         max_steps=4 if rnd == 1 else 2, temperature=0.5, max_tokens=6000,
                         validate_final=lambda c: len(extract_tagged(c, "letter") or (c or "").strip()) >= 100)
         draft = extract_tagged(run.content, "letter") or (run.content or "").strip()
+        if has_tool_markup(draft):
+            draft = ""  # tool-call text is never a letter
         if len(draft) < 100:
             if letter is None:
                 raise AgentError("The AI could not write a cover letter. Please try again.")
@@ -125,7 +132,7 @@ def write_cover_letter(
         letter = draft
 
         lint = lint_letter(letter, source, job_text, keywords)
-        review = critique(llm, letter, job, resume, lint)
+        review = critique(llm, letter, job, fitted.text, lint)
         approved = review.approved and not lint.hard
         issues = lint.hard + review.issues
         history.append(RoundSummary(round=rnd, score=review.score, approved=approved, issues=issues))
@@ -143,5 +150,7 @@ def write_cover_letter(
         remaining_issues=[] if last.approved else last.issues,
         suggestions=[] if last.approved else review.suggestions,
         history=history,
+        note=("Your resume is long, so the writer used the parts most relevant to this job."
+              if fitted.was_shortened else None),
     )
     return letter, report, trace

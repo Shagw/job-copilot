@@ -26,7 +26,7 @@ import httpx
 MAX_BYTES = 2 * 1024 * 1024
 TIMEOUT_SECONDS = 10
 MAX_REDIRECTS = 3
-MAX_TEXT_CHARS = 20_000
+MAX_TEXT_CHARS = 100_000  # the parser shortens long pages automatically
 ALLOWED_PORTS = {80, 443}
 USER_AGENT = "JobCopilot/1.0 (personal job-application assistant; fetches single pages on user request)"
 

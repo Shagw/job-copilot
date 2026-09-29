@@ -7,12 +7,15 @@ user exactly what to double-check before approving.
 """
 from __future__ import annotations
 
+import json
+
 from pydantic import BaseModel
 
 from app.agents.ats import ClaimReport, Coverage, keyword_coverage, verify_claims
-from app.agents.base import AgentError, AgentResult, extract_tagged, run_agent
+from app.agents.base import AgentError, AgentResult, extract_tagged, has_tool_markup, run_agent
 from app.agents.fit_scorer import FitResult
 from app.agents.job_parser import ParsedJob
+from app.agents.shorten import char_budget, shorten
 from app.agents.tools import check_ats_coverage_tool, search_experience_tool, verify_claims_tool
 from app.llm.groq_client import LLMClient
 from app.rag.store import ResumeIndex
@@ -27,6 +30,7 @@ class TailorReport(BaseModel):
     claims: ClaimReport
     changes: list[str]
     target_met: bool
+    note: str | None = None  # e.g. the resume was too long and was shortened for the AI
 
 
 SYSTEM = f"""You are the Resume Tailor agent in a job-application assistant.
@@ -89,10 +93,18 @@ def _changes(text: str | None) -> list[str]:
 
 
 def _extract_resume(content: str | None) -> str | None:
+    if has_tool_markup(content):
+        return None  # tool-call text is never a resume (it was once saved as one)
     tailored = extract_tagged(content, "resume")
     if tailored is None and len((content or "").strip()) > 200 and "<changes>" not in (content or ""):
         tailored = content.strip()  # model forgot the tags but returned a resume
     return tailored
+
+
+def _shortened_note(removed: int) -> str:
+    return (f"Your resume is longer than the AI can handle in one go, so it worked from the parts most relevant "
+            f"to this job ({removed} less relevant line{'s' if removed != 1 else ''} left out). "
+            "Add back anything important in the editor below.")
 
 
 def tailor_resume(
@@ -105,15 +117,21 @@ def tailor_resume(
     instructions: str | None = None,
 ) -> tuple[str, TailorReport, AgentResult]:
     keywords = job.keywords or job.must_have
+    tools = [
+        check_ats_coverage_tool(keywords, resume_text),  # tools always check against the FULL resume
+        verify_claims_tool(keywords, resume_text),
+        search_experience_tool(index, user_id),
+    ]
+    # Measured live: the biggest request holds the resume + the draft (in a tool call) + tool results, and
+    # the output is the draft again (~0.75 of a copy in estimate units) plus ~1000 tokens of reasoning.
+    overhead = (len(SYSTEM) + len(_user_message(job, "", fit, instructions))
+                + sum(len(json.dumps(t.spec())) for t in tools) + 3000)
+    fitted = shorten(resume_text, char_budget(llm, 1000, overhead, copies=2.75), keywords)
     run = run_agent(
         llm,
         system=SYSTEM,
-        user=_user_message(job, resume_text, fit, instructions),
-        tools=[
-            check_ats_coverage_tool(keywords, resume_text),
-            verify_claims_tool(keywords, resume_text),
-            search_experience_tool(index, user_id),
-        ],
+        user=_user_message(job, fitted.text, fit, instructions),
+        tools=tools,
         max_steps=MAX_STEPS,
         temperature=0.3,
         max_tokens=8000,
@@ -132,5 +150,6 @@ def tailor_resume(
         claims=claims,
         changes=_changes(extract_tagged(run.content, "changes")),
         target_met=after.supported_percent >= TARGET_COVERAGE and claims.ok,
+        note=_shortened_note(fitted.removed_lines) if fitted.was_shortened else None,
     )
     return tailored, report, run

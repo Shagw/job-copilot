@@ -315,7 +315,8 @@ def test_fit_end_to_end(logged_in, use_llm, resume_index):
     assert fit["gaps"] == ["Terraform"]
     # Real RAG results from the user's resume were given to the agent.
     tool_msgs = [m for m in llm.calls[1][0] if m["role"] == "tool"]
-    assert len(tool_msgs) == 2 and "FastAPI" in tool_msgs[1]["content"]
+    assert len(tool_msgs) == 2 and "FastAPI" in tool_msgs[0]["content"]
+    assert "same excerpt as shown earlier" in tool_msgs[1]["content"]  # repeats aren't resent
     # Reasoning trace is saved for the UI.
     assert [t["type"] for t in body["agent_trace"]["fit"]] == ["tool", "tool", "final"]
 

@@ -122,16 +122,35 @@ test('full journey: signup → resume → job → fit → tailor → cover lette
   await page.getByLabel('Notes for the resume tailor (optional)').fill('Emphasise API design and mentoring')
   await timed('tailor', async () => {
     await page.getByRole('button', { name: 'Tailor my resume' }).click()
-    await expect(page.getByLabel('Tailored resume', { exact: true })).toBeVisible({ timeout: 180_000 })
+    await expect(page.getByTitle('Tailored resume (PDF preview)')).toBeVisible({ timeout: 180_000 })
   })
-  const tailored = await page.getByLabel('Tailored resume', { exact: true }).inputValue()
+  // The preview is a real PDF rendered by the backend, embeddable only by our own page.
+  const previewSrc = (await page.getByTitle('Tailored resume (PDF preview)').getAttribute('src'))!.split('#')[0]
+  const preview = await page.request.get(previewSrc)
+  expect(preview.headers()['content-type']).toBe('application/pdf')
+  expect(preview.headers()['x-frame-options']).toBe('SAMEORIGIN')
+  expect((await preview.body()).subarray(0, 4).toString()).toBe('%PDF')
+  await page.waitForTimeout(1500) // let the browser PDF viewer paint for the screenshot
+  await shot(page, '06a-tailored-pdf-preview')
+  await page.getByRole('button', { name: 'Edit text' }).click()
+  const tailored = await page.getByLabel('Resume text').inputValue()
   expect(tailored).toContain('Zeta Payments')
   expect(tailored).not.toMatch(/Kubernetes|Terraform|Kafka/) // never claims skills the resume lacks
   await expect(page.getByText(/Keyword coverage:/)).toBeVisible()
   await shot(page, '06-tailored')
 
   // --- human edit, then cover letter ---
-  await page.getByLabel('Tailored resume', { exact: true }).fill(tailored + '\n\nINTERESTS\nOpen-source contributor')
+  await page.getByLabel('Resume text').fill(tailored + '\n\nINTERESTS\nOpen-source contributor')
+  const saved = page.waitForResponse((r) => r.request().method() === 'PATCH' && r.ok())
+  await page.getByRole('button', { name: 'Save & preview' }).click()
+  await saved
+  await expect(page.getByTitle('Tailored resume (PDF preview)')).toHaveAttribute('src', /&v=1#/) // re-rendered
+  const [pdfDownload] = await Promise.all([
+    page.waitForEvent('download'),
+    page.getByRole('link', { name: 'Download PDF' }).click(),
+  ])
+  expect(pdfDownload.suggestedFilename()).toMatch(/^resume-Northwind-.*\.pdf$/)
+  expect(readFileSync((await pdfDownload.path())!).toString('latin1')).toContain('%PDF')
   await page.getByLabel('Notes for the cover letter (optional)').fill('I like that Northwind is remote-first')
   await timed('cover_letter', async () => {
     await page.getByRole('button', { name: 'Approve & write cover letter' }).click()

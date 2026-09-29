@@ -157,6 +157,7 @@ export function TailorReportView({ report }: { report: TailorReport }) {
         </div>
       )}
       {report.changes.length > 0 && <BulletList title="What the agent changed" items={report.changes} />}
+      {report.note && <p className="hint">ℹ️ {report.note}</p>}
     </div>
   )
 }
@@ -173,6 +174,7 @@ export function CoverLetterReportView({ report }: { report: CoverLetterReport })
         score {report.score}/10 after {report.rounds} round{report.rounds === 1 ? '' : 's'} (
         {report.history.map((h) => h.score).join(' → ')})
       </p>
+      {report.note && <p className="hint">ℹ️ {report.note}</p>}
       {!report.approved && (
         <div className="alert alert-warn" role="alert">
           <strong>The critic still flagged:</strong>

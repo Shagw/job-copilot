@@ -4,9 +4,10 @@ from __future__ import annotations
 from pydantic import BaseModel, field_validator
 
 from app.agents.base import AgentError, parse_structured
+from app.agents.shorten import char_budget, shorten
 from app.llm.groq_client import LLMClient
 
-MAX_JOB_CHARS = 20_000
+MAX_JOB_CHARS = 100_000  # hard cap before shortening (CPU safety); the LLM sees at most the token budget
 _CAPS = {"must_have": 15, "nice_to_have": 10, "responsibilities": 10, "keywords": 25}
 
 
@@ -87,7 +88,8 @@ Rules:
 
 
 def parse_job(llm: LLMClient, job_text: str) -> ParsedJob:
-    text = job_text.strip()[:MAX_JOB_CHARS]
+    # Long pages (scraped career sites) are shortened automatically instead of failing.
+    text = shorten(job_text.strip()[:MAX_JOB_CHARS], char_budget(llm, 2000, len(SYSTEM) + 100)).text
     result = llm.chat(
         [
             {"role": "system", "content": SYSTEM},

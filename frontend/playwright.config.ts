@@ -15,7 +15,8 @@ export default defineConfig({
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
   },
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
+  // channel 'chromium' = full Chromium in new headless mode; the default headless shell has no PDF viewer.
+  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'], channel: 'chromium' } }],
   webServer: {
     command: 'sh e2e/serve.sh',
     env: { E2E_PORT: String(PORT) },

@@ -412,3 +412,73 @@ def test_me_reports_admin_flag(client, outbox):
     client.post("/auth/logout")
     make_user(client, outbox, email="admin@example.com", stay_logged_in=True)
     assert client.get("/auth/me").json()["is_admin"] is True
+
+
+# ---------- PDF export / preview ----------
+
+PDF_RESUME = ("Alice Example\nBackend Engineer | alice@example.com\n\nEXPERIENCE\n"
+              "Initech – Software Engineer (2021–2024)\n- Built REST APIs in Python → 3M requests/day\n"
+              "• Deployed on AWS — with Docker\n\nSKILLS\nPython, FastAPI, ₹ budgets, café ✓")
+
+
+def _pdf_text(content: bytes) -> str:
+    from pypdf import PdfReader
+    return "\n".join(p.extract_text() for p in PdfReader(io.BytesIO(content)).pages)
+
+
+def test_export_resume_pdf_download(logged_in, use_llm):  # noqa: F811
+    s = start_session(logged_in, use_llm)
+    logged_in.patch(f"/sessions/{s['id']}", json={"tailored_resume": PDF_RESUME})
+    r = logged_in.get(f"/sessions/{s['id']}/export/resume?format=pdf")
+    assert r.status_code == 200 and r.headers["content-type"] == "application/pdf"
+    assert r.content.startswith(b"%PDF")
+    assert r.headers["content-disposition"] == 'attachment; filename="resume-Initech-Senior-Backend-Engineer.pdf"'
+    assert r.headers["cache-control"] == "private, no-store"
+    text = _pdf_text(r.content)  # real, selectable text (ATS-readable), Unicode mapped instead of crashing
+    for expected in ["Alice Example", "EXPERIENCE", "Initech - Software Engineer (2021-2024)",
+                     "Built REST APIs in Python -> 3M requests/day", "Deployed on AWS - with Docker", "Rs. budgets",
+                     "café"]:
+        assert expected in text, expected
+    assert "x-frame-options" not in r.headers  # downloads keep the site default (never framed)
+
+
+def test_pdf_preview_is_inline_and_frameable_only_by_us(logged_in, use_llm):  # noqa: F811
+    s = start_session(logged_in, use_llm)
+    logged_in.patch(f"/sessions/{s['id']}", json={"tailored_resume": PDF_RESUME})
+    r = logged_in.get(f"/sessions/{s['id']}/export/resume?format=pdf&inline=true")
+    assert r.status_code == 200 and r.headers["content-disposition"].startswith("inline;")
+    assert r.headers["x-frame-options"] == "SAMEORIGIN"
+    assert r.headers["content-security-policy"] == "frame-ancestors 'self'"  # no object-src: it would block the viewer
+
+
+def test_cover_letter_pdf_and_owner_only(client, logged_in, use_llm, outbox):  # noqa: F811
+    s = start_session(logged_in, use_llm)
+    letter = "Dear Hiring Manager,\n\nI build APIs.\nThey scale.\n\nSincerely,\nAlice Example"
+    logged_in.patch(f"/sessions/{s['id']}", json={"cover_letter": letter * 3})
+    r = logged_in.get(f"/sessions/{s['id']}/export/cover-letter?format=pdf")
+    assert r.status_code == 200 and "Sincerely," in _pdf_text(r.content)
+    assert logged_in.get(f"/sessions/{s['id']}/export/resume?format=exe").status_code == 422
+    client.post("/auth/logout")
+    make_user(client, outbox, email="bob@example.com", stay_logged_in=True)
+    assert client.get(f"/sessions/{s['id']}/export/cover-letter?format=pdf").status_code == 404
+
+
+def test_long_resume_pdf_paginates():
+    from pypdf import PdfReader
+    from app.services.pdf_export import resume_to_pdf
+    pdf = resume_to_pdf("Alice\n\nEXPERIENCE\n" + "\n".join(f"- Achievement number {i} " * 3 for i in range(120)))
+    assert len(PdfReader(io.BytesIO(pdf)).pages) >= 3
+
+
+def test_pdf_text_mapping_handles_unicode_spaces_and_dashes():
+    """Seen live: 'Nov 2022' with a narrow no-break space rendered as 'Nov?2022'."""
+    from app.services.pdf_export import to_latin1
+
+    for space in ["\u202f", "\u2007", "\u2002", "\u2003", "\u2008", "\u205f", "\u3000", "\u200a", "\u00a0"]:
+        assert to_latin1(f"Nov{space}2022") == "Nov 2022", hex(ord(space))
+    for invisible in ["\u200b", "\u2060", "\u00ad", "\ufeff", "\u200d"]:
+        assert to_latin1(f"Py{invisible}thon") == "Python", hex(ord(invisible))
+    for dash in ["\u2010", "\u2011", "\u2012", "\u2013", "\u2015", "\u2e3a", "\ufe58"]:
+        assert to_latin1(f"2022{dash}2026") in ("2022-2026", "2022 - 2026"), hex(ord(dash))
+    assert to_latin1("oﬃce café ½") == "office café ½"  # ligature decomposed, Latin-1 kept
+    assert to_latin1("Hindi: नमस्ते") .count("?") > 0  # no plain equivalent: still visible as '?'

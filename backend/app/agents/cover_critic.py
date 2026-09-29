@@ -17,6 +17,7 @@ from pydantic import BaseModel, field_validator
 from app.agents.ats import has_keyword, numbers_in
 from app.agents.base import parse_structured
 from app.agents.job_parser import ParsedJob
+from app.agents.shorten import char_budget, shorten
 from app.llm.groq_client import LLMClient
 
 MIN_WORDS, MAX_WORDS = 150, 500
@@ -116,12 +117,13 @@ Reply with ONLY this JSON:
 def critique(
     llm: LLMClient, letter: str, job: ParsedJob, source: str, lint: Lint
 ) -> Critique:
+    source = shorten(source, char_budget(llm, 1500, len(SYSTEM) + len(letter) + 2000), job.keywords).text
     checks = "\n".join(f"- {x}" for x in lint.hard + lint.soft) or "- none"
     user = (
         f"JOB: {job.title}{f' at {job.company}' if job.company else ''}\n"
         f"Must have: {json.dumps(job.must_have)}\nNice to have: {json.dumps(job.nice_to_have)}\n\n"
         f"Automated checks found:\n{checks}\n\n"
-        f"<resume>\n{source[:12000]}\n</resume>\n\n<letter>\n{letter}\n</letter>"
+        f"<resume>\n{source}\n</resume>\n\n<letter>\n{letter}\n</letter>"
     )
     result = llm.chat(
         [{"role": "system", "content": SYSTEM}, {"role": "user", "content": user}],

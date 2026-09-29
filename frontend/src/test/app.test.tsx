@@ -253,7 +253,8 @@ describe('session wizard', () => {
 
     expect(await screen.findByText(/Check these lines before using the resume/)).toBeInTheDocument()
     expect(screen.getByText('Kubernetes')).toHaveClass('chip-bad') // never added: no evidence
-    await user.type(screen.getByLabelText('Tailored resume'), ' edited')
+    await user.click(screen.getByRole('button', { name: 'Edit text' }))
+    await user.type(screen.getByLabelText('Resume text'), ' edited')
     await user.type(screen.getByLabelText('Notes for the cover letter (optional)'), 'Love your open source work')
     await user.click(screen.getByRole('button', { name: 'Approve & write cover letter' }))
 
@@ -263,6 +264,30 @@ describe('session wizard', () => {
       tailored_resume: tailored + ' edited',
       instructions: 'Love your open source work',
     })
+  })
+
+  it('previews the tailored resume as a PDF and saves edits before re-rendering it', async () => {
+    loggedIn()
+    const tailored = 'Alice Example\n\nEXPERIENCE\n- Built APIs in Python with FastAPI at Acme for three years'
+    const s = session({ fit_result: FIT, tailored_resume: tailored, current_step: 'tailored' })
+    f.on('GET', '/sessions/7', { body: s })
+    f.on('PATCH', '/sessions/7', (init) => ({ body: { ...s, ...JSON.parse(String(init.body)) } }))
+    renderApp('/sessions/7')
+    const user = userEvent.setup()
+
+    const frame = await screen.findByTitle('Tailored resume (PDF preview)')
+    expect(frame).toHaveAttribute('src', '/api/sessions/7/export/resume?format=pdf&inline=true&v=0#view=FitH&navpanes=0')
+    expect(screen.getByRole('button', { name: 'Preview (PDF)' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('link', { name: 'Download PDF' })).toHaveAttribute('href', '/api/sessions/7/export/resume?format=pdf')
+
+    await user.click(screen.getByRole('button', { name: 'Edit text' }))
+    expect(screen.queryByTitle('Tailored resume (PDF preview)')).not.toBeInTheDocument()
+    await user.type(screen.getByLabelText('Resume text'), ' and Go')
+    await user.click(screen.getByRole('button', { name: 'Save & preview' }))
+
+    expect(await screen.findByTitle('Tailored resume (PDF preview)')).toHaveAttribute(
+      'src', '/api/sessions/7/export/resume?format=pdf&inline=true&v=1#view=FitH&navpanes=0') // cache-busted after save
+    expect(f.calls.find((c) => c.method === 'PATCH')!.body).toEqual({ tailored_resume: tailored + ' and Go' })
   })
 
   it('saves letter edits and status with PATCH', async () => {

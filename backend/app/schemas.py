@@ -113,7 +113,7 @@ class LlmSlotStatus(BaseModel):
 class SessionCreate(BaseModel):
     """Paste the job text, or give a public job URL and the server fetches it."""
 
-    job_text: str | None = Field(None, min_length=50, max_length=20_000)
+    job_text: str | None = Field(None, min_length=50, max_length=100_000)
     job_url: HttpUrl | None = None
 
     @model_validator(mode="after")

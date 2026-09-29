@@ -143,7 +143,7 @@ def test_empty_final_answer_gets_one_nudge(resume_index):
 
 def test_tailor_empty_output_raises(resume_index):
     with pytest.raises(AgentError):
-        tailor_resume(FakeLLM("sorry", "still sorry"), JOB, RESUME, resume_index, 1)
+        tailor_resume(FakeLLM("sorry", "still sorry", "sorry again"), JOB, RESUME, resume_index, 1)
 
 
 # ---------- Cover letter lint ----------
@@ -218,7 +218,7 @@ def test_writer_gets_candidate_notes(resume_index):
 
 def test_empty_first_draft_raises(resume_index):
     with pytest.raises(AgentError):
-        run_letter(FakeLLM("<letter>hi</letter>", "<letter>hi</letter>"), resume_index)
+        run_letter(FakeLLM("<letter>hi</letter>", "<letter>hi</letter>", "<letter>hi</letter>"), resume_index)
 
 
 # ---------- endpoints ----------
@@ -313,3 +313,40 @@ def test_fit_drops_strengths_with_invented_totals():
     result = build_result(JOB, llm_fit, RESUME)
     assert result.strengths == ["FastAPI APIs serving 2M requests per day"]  # 2M is in the resume
     assert result.advice == ["Lead with the 5+ years requirement"]  # 5 is in the job posting
+
+
+# ---------- tool calls written as text (seen live: qwen3 on Groq) ----------
+
+QWEN_CALL = ("<tool_call>\n<function=verify_claims>\n<parameter=draft>\nAlice Example\n- Built REST APIs in Python\n"
+             "</parameter>\n</function>\n</tool_call>")
+
+
+def test_text_tool_calls_are_parsed():
+    from app.agents.base import strip_tool_markup, text_tool_calls
+
+    assert text_tool_calls(QWEN_CALL) == [("verify_claims", json.dumps({"draft": "Alice Example\n- Built REST APIs in Python"}))]
+    hermes = '<tool_call>{"name": "search_my_experience", "arguments": {"query": "AWS"}}</tool_call>'
+    assert text_tool_calls(hermes) == [("search_my_experience", '{"query": "AWS"}')]
+    two = QWEN_CALL + "\n" + QWEN_CALL.replace("verify_claims", "check_ats_coverage")
+    assert [n for n, _ in text_tool_calls(two)] == ["verify_claims", "check_ats_coverage"]
+    assert text_tool_calls("A normal resume with <b>no</b> calls") == []
+    assert strip_tool_markup("Thinking.\n" + QWEN_CALL) == "Thinking."
+
+
+def test_agent_runs_text_tool_calls_instead_of_returning_them(resume_index):
+    llm = FakeLLM(QWEN_CALL, f"<resume>\n{TAILORED}\n</resume>\n<changes>\n- Reordered\n</changes>")
+    text, report, run = tailor_resume(llm, JOB, RESUME, resume_index, 1)
+    assert text == TAILORED
+    tool_steps = [s for s in run.trace if s["type"] == "tool"]
+    assert tool_steps[0]["tool"] == "verify_claims" and tool_steps[0]["text_call"] is True
+    tool_msg = next(m for m in llm.calls[1][0] if m["role"] == "tool")
+    assert '"ok"' in tool_msg["content"]  # the tool really ran and its result went back to the model
+
+
+def test_final_answer_that_is_only_tool_markup_is_retried_then_rejected(resume_index):
+    """The live bug: the forced final answer was tool-call text and got saved as the resume."""
+    with pytest.raises(AgentError):
+        tailor_resume(FakeLLM("sorry", QWEN_CALL, QWEN_CALL, QWEN_CALL), JOB, RESUME, resume_index, 1)
+    llm = FakeLLM("sorry", QWEN_CALL, f"<resume>\n{TAILORED}\n</resume>")
+    text, _, _ = tailor_resume(llm, JOB, RESUME, resume_index, 1)
+    assert text == TAILORED and "<tool_call>" not in text

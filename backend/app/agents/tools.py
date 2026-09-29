@@ -101,6 +101,13 @@ def verify_claims_tool(keywords: list[str], original: str) -> Tool:
 
 
 def search_experience_tool(index: ResumeIndex, user_id: int) -> Tool:
+    """Create one per agent run: excerpts already returned in this run are referenced, not resent.
+
+    Agents search many times and hit the same resume chunks repeatedly; resending them grew the
+    Fit Scorer's history past Groq's 8K-token request limit on a normal two-page resume.
+    """
+    seen: dict[str, int] = {}
+
     def search_my_experience(query: str, k: int = 3) -> dict:
         try:
             k = max(1, min(int(k), 5))
@@ -109,7 +116,15 @@ def search_experience_tool(index: ResumeIndex, user_id: int) -> Tool:
         hits = index.search(user_id, str(query)[:300], k)
         if not hits:
             return {"results": [], "note": "No matching experience found in the resume."}
-        return {"results": [{"text": h.text, "relevance": h.score} for h in hits]}
+        results = []
+        for h in hits:
+            if h.text in seen:
+                results.append({"excerpt": seen[h.text], "text": "(same excerpt as shown earlier)",
+                                "relevance": h.score})
+            else:
+                seen[h.text] = len(seen) + 1
+                results.append({"excerpt": seen[h.text], "text": h.text, "relevance": h.score})
+        return {"results": results}
 
     return Tool(
         name="search_my_experience",

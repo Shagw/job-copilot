@@ -74,6 +74,8 @@ export interface TailorReport {
   claims: { ok: boolean; issues: ClaimIssue[] }
   changes: string[]
   target_met: boolean
+  /** Set when the resume was too long and the AI worked from a shortened version. */
+  note?: string | null
 }
 
 export interface CoverLetterRound {
@@ -90,6 +92,7 @@ export interface CoverLetterReport {
   remaining_issues: string[]
   suggestions: string[]
   history: CoverLetterRound[]
+  note?: string | null
 }
 
 /** One step of an agent's reasoning trace (see backend app/agents/base.py). */

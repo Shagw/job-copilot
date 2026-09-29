@@ -535,3 +535,53 @@ details summary {
 .round h4 {
   margin: 0.75rem 0 0.25rem;
 }
+
+/* Resume step: PDF preview / text editor toggle */
+.doc-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin: 1.25rem 0 0.5rem;
+}
+
+.doc-toolbar h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.segmented {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.segmented button {
+  border: 0;
+  border-radius: 0;
+  background: var(--card);
+  color: var(--text);
+  padding: 0.45rem 0.9rem;
+  font-weight: 600;
+}
+
+.segmented button + button {
+  border-left: 1px solid var(--border);
+}
+
+.segmented button[aria-pressed=true] {
+  background: var(--primary);
+  color: #fff;
+}
+
+.pdf-preview iframe {
+  display: block;
+  width: 100%;
+  height: min(85vh, 1100px);
+  min-height: 480px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: #525659; /* matches the browser PDF viewer, avoids a white flash */
+}

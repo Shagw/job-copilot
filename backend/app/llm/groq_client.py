@@ -72,10 +72,15 @@ class ChatResult:
     usage: Any = None
 
 
-def _is_json_generation_failure(err: groq.APIStatusError) -> bool:
+_GENERATION_FAILURES = ("json_validate_failed", "tool_use_failed")
+
+
+def _is_generation_failure(err: groq.APIStatusError) -> bool:
     body = err.body if isinstance(err.body, dict) else {}
     code = (body.get("error") or body).get("code") if isinstance(body.get("error", body), dict) else None
-    return err.status_code == 400 and (code == "json_validate_failed" or "json_validate_failed" in str(err))
+    # json_validate_failed: bad JSON in JSON mode. tool_use_failed: the model called a tool when tools were
+    # off, or wrote a malformed call. Both are the model misbehaving on this attempt, not a bad request.
+    return err.status_code == 400 and any(c == code or c in str(err) for c in _GENERATION_FAILURES)
 
 
 def parse_retry_after(err: groq.APIStatusError, default: float) -> float:
@@ -175,10 +180,10 @@ class LLMClient:
                     continue
                 if e.status_code >= 500:
                     self.pool.mark_rate_limited(slot, TRANSIENT_COOLDOWN_SECONDS, f"{e.status_code} server error")
-                elif _is_json_generation_failure(e):
-                    # JSON mode: the *model* produced invalid JSON (often empty output under load).
+                elif _is_generation_failure(e):
+                    # The *model* produced invalid output (bad JSON, unwanted tool call).
                     # That's a generation hiccup, not a bad request: try another slot.
-                    self.pool.mark_rate_limited(slot, 1.0, "json generation failed")
+                    self.pool.mark_rate_limited(slot, 1.0, "generation failed")
                 else:
                     raise  # 400/413/422: request problem, not a slot problem
             log.info("LLM failing over from %s", slot.label)

@@ -36,6 +36,7 @@ from app.schemas import (
 )
 from app.services.archive import archive_expired, history_cutoff
 from app.services.docx_export import text_to_docx
+from app.services.pdf_export import letter_to_pdf, resume_to_pdf
 from app.services.url_fetcher import FetchError, fetch_job_text
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
@@ -245,20 +246,32 @@ def _safe_filename(*parts: str | None) -> str:
 
 
 @router.get("/{session_id}/export/{kind}")
-def export_docx(
+def export_document(
     session_id: int,
     kind: Literal["resume", "cover-letter"],
+    format: Literal["docx", "pdf"] = "docx",
+    inline: bool = False,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    """Download the saved resume / letter as DOCX or PDF. `inline=true` (PDF only) is for the in-app
+    preview: shown in the browser's PDF viewer inside our own page instead of downloaded."""
     session = get_visible_session(db, user, session_id)
     text = session.tailored_resume if kind == "resume" else session.cover_letter
     if not text:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"No {kind.replace('-', ' ')} generated yet")
     job = session.parsed_job or {}
-    filename = _safe_filename(kind, job.get("company"), job.get("title")) + ".docx"
-    return Response(
-        content=text_to_docx(text),
-        media_type=_DOCX,
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-    )
+    filename = _safe_filename(kind, job.get("company"), job.get("title")) + f".{format}"
+    headers = {"Cache-Control": "private, no-store"}  # personal data; always the latest saved version
+    if format == "pdf":
+        content = resume_to_pdf(text) if kind == "resume" else letter_to_pdf(text)
+        disposition = "inline" if inline else "attachment"
+        if inline:
+            # Only our own pages may embed it (the site default is "never framed").
+            headers |= {"X-Frame-Options": "SAMEORIGIN",
+                        "Content-Security-Policy": "frame-ancestors 'self'"}
+        media_type = "application/pdf"
+    else:
+        content, disposition, media_type = text_to_docx(text), "attachment", _DOCX
+    headers["Content-Disposition"] = f'{disposition}; filename="{filename}"'
+    return Response(content=content, media_type=media_type, headers=headers)

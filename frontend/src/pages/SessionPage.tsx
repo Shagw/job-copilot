@@ -10,6 +10,7 @@ import {
   ParsedJobEditor,
   TailorReportView,
 } from '../components/Reports'
+import { PdfPreview } from '../components/PdfPreview'
 import { ErrorAlert, Field, Notice, Working } from '../components/ui'
 import { formatDate } from '../lib/format'
 
@@ -105,7 +106,7 @@ export function SessionPage() {
       <div className="card" role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`}>
         {tab === 'job' && <JobStep session={session} onDone={(s) => update(s, 'fit')} />}
         {tab === 'fit' && <FitStep session={session} onDone={(s) => update(s, 'resume')} />}
-        {tab === 'resume' && <ResumeStep session={session} onDone={(s) => update(s, 'letter')} />}
+        {tab === 'resume' && <ResumeStep session={session} onDone={(s) => update(s, 'letter')} onSaved={(s) => update(s)} />}
         {tab === 'letter' && <LetterStep session={session} onSaved={(s) => update(s)} />}
       </div>
     </section>
@@ -185,21 +186,61 @@ function FitStep({ session, onDone }: StepProps) {
   )
 }
 
-function ResumeStep({ session, onDone }: StepProps) {
+function ResumeStep({ session, onDone, onSaved }: StepProps & { onSaved: (s: JobSession) => void }) {
   const [text, setText] = useState(session.tailored_resume!)
   const [notes, setNotes] = useState('')
+  const [mode, setMode] = useState<'preview' | 'edit'>('preview')
+  const [version, setVersion] = useState(0)
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState<unknown>(null)
   const { busy, error, run } = useAgentRun()
+  const dirty = text !== session.tailored_resume
+
+  /** The PDF is rendered from the saved text, so save edits before showing the preview. */
+  async function showPreview() {
+    setSaveError(null)
+    if (dirty) {
+      setSaving(true)
+      try {
+        onSaved(await api.updateSession(session.id, { tailored_resume: text }))
+        setVersion((v) => v + 1)
+      } catch (e) {
+        setSaveError(e)
+        return
+      } finally {
+        setSaving(false)
+      }
+    }
+    setMode('preview')
+  }
   return (
     <>
       <h2>Your tailored resume</h2>
       {session.tailor_report && <TailorReportView report={session.tailor_report} />}
       <AgentTraceView steps={session.agent_trace?.tailor} />
-      <Field label="Tailored resume" hint="Edit freely. Your version is saved and used for the cover letter.">
-        {(id, hint) => (
-          <textarea id={id} aria-describedby={hint} className="doc-editor" rows={22} value={text}
-            onChange={(e) => setText(e.target.value)} />
-        )}
-      </Field>
+      <div className="doc-toolbar">
+        <h3 id="resume-view-label">Tailored resume</h3>
+        <div className="segmented" role="group" aria-labelledby="resume-view-label">
+          <button type="button" aria-pressed={mode === 'preview'} disabled={saving || text.trim().length < 50}
+            onClick={showPreview}>
+            {saving ? 'Saving…' : dirty && mode === 'edit' ? 'Save & preview' : 'Preview (PDF)'}
+          </button>
+          <button type="button" aria-pressed={mode === 'edit'} onClick={() => setMode('edit')}>
+            Edit text
+          </button>
+        </div>
+      </div>
+      <ErrorAlert error={saveError} />
+      {mode === 'preview' ? (
+        <PdfPreview src={api.previewUrl(session.id, 'resume', version)} title="Tailored resume (PDF preview)" />
+      ) : (
+        <Field label="Resume text" hint="Keep headings in CAPITALS and start bullets with “- ” for the best PDF layout. Your version is used for the cover letter.">
+          {(id, hint) => (
+            <textarea id={id} aria-describedby={hint} className="doc-editor" rows={22} value={text}
+              onChange={(e) => setText(e.target.value)} />
+          )}
+        </Field>
+      )}
       <Field label="Notes for the cover letter (optional)" hint="Why this company, tone, anything personal to mention.">
         {(id, hint) => (
           <textarea id={id} aria-describedby={hint} rows={2} maxLength={1000} value={notes}
@@ -208,15 +249,18 @@ function ResumeStep({ session, onDone }: StepProps) {
       </Field>
       <ErrorAlert error={error} />
       <div className="actions">
+        <a className="button secondary" href={api.exportUrl(session.id, 'resume', 'pdf')}>
+          Download PDF
+        </a>
         <a className="button secondary" href={api.exportUrl(session.id, 'resume')}>
           Download DOCX
         </a>
-        <button type="button" className="primary" disabled={busy || text.trim().length < 50}
+        <button type="button" className="primary" disabled={busy || saving || text.trim().length < 50}
           onClick={() => run(() => api.runCoverLetter(session.id, text, notes.trim() || undefined), onDone)}>
           Approve & write cover letter
         </button>
       </div>
-      <p className="muted small">DOCX downloads the last saved version. Approving saves your edits.</p>
+      <p className="muted small">Downloads use the last saved version. Approving also saves your edits.</p>
       {busy && <Working label="Writer and Critic agents are drafting and reviewing your letter" />}
     </>
   )
@@ -278,8 +322,14 @@ function LetterStep({ session, onSaved }: { session: JobSession; onSaved: (s: Jo
         <button type="button" className="primary" disabled={busy || !dirty || letter.trim().length < 50} onClick={save}>
           {busy ? 'Saving…' : 'Save'}
         </button>
+        <a className="button secondary" href={api.exportUrl(session.id, 'cover-letter', 'pdf')}>
+          Download letter (PDF)
+        </a>
         <a className="button secondary" href={api.exportUrl(session.id, 'cover-letter')}>
           Download letter (DOCX)
+        </a>
+        <a className="button secondary" href={api.exportUrl(session.id, 'resume', 'pdf')}>
+          Download resume (PDF)
         </a>
         <a className="button secondary" href={api.exportUrl(session.id, 'resume')}>
           Download resume (DOCX)
