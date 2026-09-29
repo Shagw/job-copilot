@@ -91,10 +91,27 @@ length; soft: clichés, skills the resume lacks) → LLM Critic scores 1-10. App
 always returned with its status.
 
 **Robustness.**
-- If a final answer is empty or in the wrong format, the agent gets one corrective nudge.
+- If a final answer is empty, in the wrong format or contains tool-call markup, the agent gets up to 2
+  corrective retries with tools off. If it still fails, the step errors and nothing is saved.
+- Some models (qwen3) sometimes *write* tool calls as text (`<tool_call><function=…>` or Hermes JSON) instead
+  of using the API. These are parsed and executed like real calls and marked `text_call` in the trace.
+  Tool-call text is never accepted as a resume or letter.
 - Old tool-call arguments (full drafts) are trimmed from the agent history to save tokens.
+- `search_my_experience` returns each resume excerpt once per agent run; repeats say "same excerpt as shown
+  earlier". Before this, repeated hits pushed the Fit Scorer past 8K tokens on a normal two-page resume.
 - Before each call, `max_tokens` is clamped so prompt + output fits `LLM_MAX_REQUEST_TOKENS`. Groq's free tier
   counts both against its 8K tokens/minute limit. A 413 shrinks `max_tokens` by the overflow and retries.
+- If the history still doesn't fit, the oldest tool results are trimmed (the newest are kept whole).
+
+**Long inputs are fitted automatically** (`agents/shorten.py`), never rejected as "too long":
+1. Clean whitespace and drop duplicate lines (common on scraped pages).
+2. Drop boilerplate: EEO/legal text, cookie and privacy banners, "share this job", footers.
+3. Keep the most useful lines in their original order: first lines (name, title), headings, dated role lines,
+   requirement-style lines and lines mentioning job keywords.
+
+Each agent computes its own character budget from `LLM_MAX_REQUEST_TOKENS`. The Tailor allows for about 2.75
+copies of the resume per request (prompt, draft in a tool call, output). When the resume was shortened, the
+report says so. Grounding, claim and coverage checks always use the full original text.
 
 ## 4. KeyPool (Groq failover + cooldown)
 
@@ -114,9 +131,12 @@ Models are set in `GROQ_MODELS`; the Llama 3.x models originally planned are no 
 - Pick the first slot that is not cooling down.
 - **429** → slot cools down for Groq's `retry-after` (or the "try again in…" hint, default 60s) → retry the same request on the next free slot.
 - **401** → every slot using that key is disabled. **404** (model removed) → that model is disabled on every key.
-- **5xx / network** → 5s cooldown, try the next slot. **400** → raised immediately (request bug).
+- **5xx / network** → 5s cooldown, try the next slot.
+- **400 `json_validate_failed` / `tool_use_failed`** (the model produced bad JSON or an unwanted tool call) → 1s
+  cooldown, try the next slot. Any other **400** → raised immediately (request bug).
 - Pool is a process-wide singleton guarded by a lock, so **no request can use a cooling slot**.
-- All slots cooling → wait up to 10s; otherwise HTTP 503 "try again in X seconds".
+- All slots cooling → wait up to `LLM_MAX_WAIT_SECONDS` (20s); otherwise HTTP 503 "try again in X seconds".
+  The budget is time-based rather than a retry count, because per-minute limits produce bursts of short 429s.
 - Keys are never logged; `/admin/llm-status` shows only the last 4 characters.
 - Cooldown state is in memory → run a single backend process. Multi-worker scaling would move it to Redis.
 - Note: Groq limits are per organization, so key A and key B must come from different accounts to add capacity.
@@ -150,13 +170,25 @@ job_sessions  id, user_id, job_url, job_text, parsed_job (JSON), fit_result (JSO
 - An archive sweep (at startup for everyone, at login and on history reads per user) sets `archived_at` on older rows.
 - **Nothing is ever deleted**; there is no delete endpoint.
 
+## 6b. Documents (DOCX + PDF)
+
+- Both are built from the saved plain text with the same rules: ALL-CAPS lines are headings and `- ` lines are
+  bullets. The PDF (`services/pdf_export.py`, fpdf2) also treats the first line as the name, lines before the
+  first heading as contact details, and lines with a year as bold role/date lines.
+- The PDF uses real, selectable text so ATS parsers can read it. The built-in fonts are Latin-1 only, so
+  typography is mapped (dashes → `-`, curly quotes → straight, → → `->`, ₹ → `Rs.`), Unicode spaces become
+  spaces, invisible characters are dropped, and bullets are drawn as shapes. Non-Latin scripts show as `?`.
+- `inline=true` is for the in-app preview. It returns `Content-Disposition: inline` with
+  `X-Frame-Options: SAMEORIGIN` and `frame-ancestors 'self'`, so only our own page can embed it; downloads keep
+  the site default of never being framed. All exports send `Cache-Control: private, no-store`.
+
 ## 7. API
 
 | Area | Endpoints |
 |------|-----------|
 | Auth | `POST /auth/signup`, `/auth/verify-otp`, `/auth/resend-otp`, `/auth/login`, `/auth/logout`, `/auth/forgot-password`, `/auth/reset-password`, `GET /auth/me` |
 | Resume | `POST /resume`, `GET /resume` |
-| Sessions | `POST /sessions` (text or URL → parse), `POST /sessions/{id}/fit`, `/tailor`, `/cover-letter`, `PATCH /sessions/{id}` (edits + status), `GET /sessions` (history, last 3 days), `GET /sessions/{id}`, `GET /sessions/{id}/export/{resume\|cover-letter}` (DOCX) |
+| Sessions | `POST /sessions` (text or URL → parse), `POST /sessions/{id}/fit`, `/tailor`, `/cover-letter`, `PATCH /sessions/{id}` (edits + status), `GET /sessions` (history, last 3 days), `GET /sessions/{id}`, `GET /sessions/{id}/export/{resume\|cover-letter}?format=docx\|pdf[&inline=true]` |
 | Ops | `GET /admin/llm-status` (only emails in `ADMIN_EMAILS`) |
 
 ## 8. Folder structure
@@ -173,7 +205,9 @@ job-copilot/
 │   │   │                fit_scorer.py, resume_tailor.py, cover_writer.py, cover_critic.py
 │   │   ├── llm/         key_pool.py, groq_client.py
 │   │   ├── rag/         embeddings.py, store.py (chunking + per-user ChromaDB index)
-│   │   └── services/    email.py, url_fetcher.py, file_parser.py, archive.py, docx_export.py
+│   │   ├── agents/…     + shorten.py (fit long inputs to the token budget)
+│   │   ├── server.py    production site: built frontend at /, API at /api, security headers
+│   │   └── services/    email.py, url_fetcher.py, file_parser.py, archive.py, docx_export.py, pdf_export.py
 │   ├── tests/
 │   ├── requirements.txt   .env.example
 └── frontend/
@@ -183,7 +217,9 @@ job-copilot/
         ├── context/          AuthProvider (asks /auth/me on load; the cookie itself is unreadable by JS)
         ├── components/       Layout + route guards, ui (ErrorAlert countdown, Working timer), Reports, AgentTrace
         ├── pages/            Login/Signup/Verify/Forgot/Reset, History, New job, Resume, Session wizard, AI status
+        ├── components/…      + PdfPreview (browser PDF viewer in an iframe)
         └── test/             Vitest + Testing Library (fetch mocked)
+    e2e/                      Playwright: serve.sh (prod build + throwaway DB), journey.spec.ts
 ```
 
 ### Frontend flow
@@ -192,6 +228,8 @@ job-copilot/
   after its agent has run. Each tab shows the agent output in editable fields plus its report and a
   collapsible "How the agent got here" trace; the user's edits are sent with the approval that starts
   the next agent.
+- The Resume tab shows the tailored resume as a **PDF preview** by default, with an "Edit text" toggle.
+  "Save & preview" PATCHes the text, then reloads the PDF (a cache-busting `v` parameter).
 - Long agent runs show an elapsed-seconds timer. A 503 "AI is busy" shows a live retry countdown.
 - A job link the backend can't fetch (LinkedIn, JS-only pages) switches the form to paste mode.
 - Accessibility: labelled inputs with hints, `role="alert"`/`status` live regions, tab semantics,
@@ -207,8 +245,27 @@ job-copilot/
 | Email | `smtplib` (Gmail SMTP) / console mode |
 | LLM | Groq SDK |
 | RAG | sentence-transformers (`all-MiniLM-L6-v2`), ChromaDB |
-| Files | pypdf, python-docx |
-| Tests | pytest, FastAPI TestClient |
+| Files | pypdf (read), python-docx (DOCX), fpdf2 (PDF) |
+| Tests | pytest + FastAPI TestClient (fake LLM/embedder), Vitest + Testing Library, Playwright (full Chromium) |
+
+## 9b. Production serving
+
+`uvicorn app.server:site` serves the built React app and the API on one origin: `/api` → the API app,
+`/assets` → hashed files cached for a year, and everything else → `index.html` for client routing. Same origin
+means the httpOnly cookie needs no CORS. Headers: a strict CSP (no inline scripts or styles,
+`frame-ancestors 'none'`, `object-src 'none'`), `X-Frame-Options: DENY`, `nosniff`, a referrer policy, a
+permissions policy and HSTS in production. Startup refuses a `JWT_SECRET` under 32 characters and
+`EMAIL_MODE=console` in production. Run one process (cooldowns and rate limits are in memory).
+
+## 9c. Testing
+
+- **Backend (222):** offline, with a scripted `FakeLLM` and a fake embedder. Covers the auth flows,
+  OTP limits, RAG isolation between users, KeyPool failover, agent loops (text tool calls, retries, step limits),
+  scoring and grounding, ATS/claim checks, shortening, URL fetcher SSRF, archive and exports.
+- **Frontend (28):** component and flow tests with mocked fetch.
+- **E2E (4):** real Chromium against the production build and real Groq. Covers the full journey, cookie and
+  security headers, password reset and mobile layout. Fails on any JS error, CSP violation or unexpected failed
+  request. It uses full Chromium because the default headless shell has no PDF viewer.
 
 ## 10. Week plan
 
@@ -221,3 +278,6 @@ job-copilot/
 | 5 | History + archive, URL fetcher, Gmail SMTP, forgot password |
 | 6 | React frontend |
 | 7 | E2E tests, polish, README with learning notes, demo |
+
+All seven days are done. Post-launch fixes from real use: automatic input fitting, PDF preview/export,
+text-form tool calls, Unicode handling in PDFs.
