@@ -86,21 +86,26 @@ export function SessionPage() {
       </p>
 
       <div className="stepper" role="tablist" aria-label="Application steps">
-        {TABS.map((t) => (
-          <button
-            key={t.id}
-            type="button"
-            role="tab"
-            id={`tab-${t.id}`}
-            aria-selected={tab === t.id}
-            aria-controls={`panel-${t.id}`}
-            disabled={!available(session, t.id)}
-            className={tab === t.id ? 'active' : available(session, t.id) ? 'done' : ''}
-            onClick={() => setTab(t.id)}
-          >
-            {t.label}
-          </button>
-        ))}
+        {TABS.map((t, i) => {
+          const done = available(session, t.id)
+          return (
+            <button
+              key={t.id}
+              type="button"
+              role="tab"
+              id={`tab-${t.id}`}
+              aria-label={t.label}
+              aria-selected={tab === t.id}
+              aria-controls={`panel-${t.id}`}
+              disabled={!done}
+              className={tab === t.id ? 'active' : done ? 'done' : ''}
+              onClick={() => setTab(t.id)}
+            >
+              <span className="step-num" aria-hidden="true">{done && tab !== t.id ? '✓' : i + 1}</span>
+              <span className="step-name">{t.label.replace(/^\d+\.\s*/, '')}</span>
+            </button>
+          )
+        })}
       </div>
 
       <div className="card" role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`}>
@@ -230,73 +235,82 @@ function ResumeStep({ session, onDone, onSaved }: StepProps & { onSaved: (s: Job
   return (
     <>
       <h2>Your tailored resume</h2>
-      {session.tailor_report && <TailorReportView report={session.tailor_report} />}
-      <AgentTraceView steps={session.agent_trace?.tailor} />
-      <div className="doc-toolbar">
-        <h3 id="resume-view-label">Tailored resume</h3>
-        <div className="segmented" role="group" aria-labelledby="resume-view-label">
-          <button type="button" aria-pressed={mode === 'preview'} disabled={saving || text.trim().length < 50}
-            onClick={showPreview}>
-            {saving ? 'Saving…' : dirty && mode === 'edit' ? 'Save & preview' : 'Preview (PDF)'}
-          </button>
-          <button type="button" aria-pressed={mode === 'edit'} onClick={() => setMode('edit')}>
-            Edit text
-          </button>
+      <div className="workspace">
+        <div className="workspace-main">
+          <div className="doc-toolbar">
+            <h3 id="resume-view-label">Tailored resume</h3>
+            <div className="segmented" role="group" aria-labelledby="resume-view-label">
+              <button type="button" aria-pressed={mode === 'preview'} disabled={saving || text.trim().length < 50}
+                onClick={showPreview}>
+                {saving ? 'Saving…' : dirty && mode === 'edit' ? 'Save & preview' : 'Preview (PDF)'}
+              </button>
+              <button type="button" aria-pressed={mode === 'edit'} onClick={() => setMode('edit')}>
+                Edit text
+              </button>
+            </div>
+          </div>
+          <ErrorAlert error={saveError} />
+          {mode === 'preview' ? (
+            <PdfPreview src={api.previewUrl(session.id, 'resume', version)} title="Tailored resume (PDF preview)" />
+          ) : (
+            <Field label="Resume text" hint="Keep headings in CAPITALS and start bullets with “- ” for the best PDF layout. Your version is used for the cover letter.">
+              {(id, hint) => (
+                <textarea id={id} aria-describedby={hint} className="doc-editor" rows={22} value={text}
+                  onChange={(e) => setText(e.target.value)} />
+              )}
+            </Field>
+          )}
+          <section className="retailor" aria-labelledby="retailor-title">
+            <h3 id="retailor-title">
+              Ask for changes {revision > 0 && <span className="muted small">(revised {revision}×)</span>}
+            </h3>
+            <Field label="What should change?"
+              hint='For example: "Fix the formatting", "Add MongoDB, I used it in side projects", "Improve the summary", "Rewrite the projects section". Works on the current text, including your edits. Skills you state count as true.'>
+              {(id, hint) => (
+                <textarea id={id} aria-describedby={hint} rows={3} maxLength={1000} value={changes}
+                  onChange={(e) => setChanges(e.target.value)} />
+              )}
+            </Field>
+            <ErrorAlert error={retailor.error} />
+            <div className="actions">
+              <button type="button" className="secondary"
+                disabled={retailor.busy || busy || saving || !changes.trim() || text.trim().length < 50}
+                onClick={reTailor}>
+                Re-tailor with these changes
+              </button>
+            </div>
+            {retailor.busy && <Working label="Resume Tailor is applying your changes and re-checking the resume" />}
+          </section>
         </div>
+        <aside className="workspace-side" aria-label="Checks on this version">
+          {session.tailor_report && <TailorReportView report={session.tailor_report} />}
+          <AgentTraceView steps={session.agent_trace?.tailor} />
+        </aside>
       </div>
-      <ErrorAlert error={saveError} />
-      {mode === 'preview' ? (
-        <PdfPreview src={api.previewUrl(session.id, 'resume', version)} title="Tailored resume (PDF preview)" />
-      ) : (
-        <Field label="Resume text" hint="Keep headings in CAPITALS and start bullets with “- ” for the best PDF layout. Your version is used for the cover letter.">
+      <section className="next-step" aria-labelledby="next-step-title">
+        <h3 id="next-step-title">Next: cover letter</h3>
+        <Field label="Notes for the cover letter (optional)" hint="Why this company, tone, anything personal to mention.">
           {(id, hint) => (
-            <textarea id={id} aria-describedby={hint} className="doc-editor" rows={22} value={text}
-              onChange={(e) => setText(e.target.value)} />
+            <textarea id={id} aria-describedby={hint} rows={2} maxLength={1000} value={notes}
+              onChange={(e) => setNotes(e.target.value)} />
           )}
         </Field>
-      )}
-      <section className="retailor" aria-labelledby="retailor-title">
-        <h3 id="retailor-title">
-          Ask for changes {revision > 0 && <span className="muted small">(revised {revision}×)</span>}
-        </h3>
-        <Field label="What should change?"
-          hint='For example: "Fix the formatting", "Add MongoDB, I used it in side projects", "Improve the summary", "Rewrite the projects section". Works on the current text, including your edits. Skills you state count as true.'>
-          {(id, hint) => (
-            <textarea id={id} aria-describedby={hint} rows={3} maxLength={1000} value={changes}
-              onChange={(e) => setChanges(e.target.value)} />
-          )}
-        </Field>
-        <ErrorAlert error={retailor.error} />
+        <ErrorAlert error={error} />
         <div className="actions">
-          <button type="button" className="secondary"
-            disabled={retailor.busy || busy || saving || !changes.trim() || text.trim().length < 50}
-            onClick={reTailor}>
-            Re-tailor with these changes
+          <a className="button secondary" href={api.exportUrl(session.id, 'resume', 'pdf')}>
+            Download PDF
+          </a>
+          <a className="button secondary" href={api.exportUrl(session.id, 'resume')}>
+            Download DOCX
+          </a>
+          <button type="button" className="primary" disabled={busy || retailor.busy || saving || text.trim().length < 50}
+            onClick={() => run(() => api.runCoverLetter(session.id, text, notes.trim() || undefined), onDone)}>
+            Approve & write cover letter
           </button>
         </div>
-        {retailor.busy && <Working label="Resume Tailor is applying your changes and re-checking the resume" />}
+        <p className="muted small">Downloads use the last saved version. Approving also saves your edits.</p>
+        {busy && <Working label="Writer and Critic agents are drafting and reviewing your letter" />}
       </section>
-      <Field label="Notes for the cover letter (optional)" hint="Why this company, tone, anything personal to mention.">
-        {(id, hint) => (
-          <textarea id={id} aria-describedby={hint} rows={2} maxLength={1000} value={notes}
-            onChange={(e) => setNotes(e.target.value)} />
-        )}
-      </Field>
-      <ErrorAlert error={error} />
-      <div className="actions">
-        <a className="button secondary" href={api.exportUrl(session.id, 'resume', 'pdf')}>
-          Download PDF
-        </a>
-        <a className="button secondary" href={api.exportUrl(session.id, 'resume')}>
-          Download DOCX
-        </a>
-        <button type="button" className="primary" disabled={busy || retailor.busy || saving || text.trim().length < 50}
-          onClick={() => run(() => api.runCoverLetter(session.id, text, notes.trim() || undefined), onDone)}>
-          Approve & write cover letter
-        </button>
-      </div>
-      <p className="muted small">Downloads use the last saved version. Approving also saves your edits.</p>
-      {busy && <Working label="Writer and Critic agents are drafting and reviewing your letter" />}
     </>
   )
 }

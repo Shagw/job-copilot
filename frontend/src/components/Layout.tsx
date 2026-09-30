@@ -12,6 +12,10 @@ export function Layout() {
       </a>
       <header className="topbar">
         <NavLink to="/" className="brand">
+          <svg className="brand-mark" viewBox="0 0 32 32" aria-hidden="true" focusable="false">
+            <rect width="32" height="32" rx="8" />
+            <path d="M9 16.5l4.5 4.5L23 11.5" />
+          </svg>
           Job Copilot
         </NavLink>
         {user && (
@@ -36,6 +40,16 @@ export function Layout() {
         )}
       </header>
       <main id="main" className="container">
+        {!user && (
+          <div className="guest-intro">
+            <p className="guest-title">Tailor every application in minutes, without making things up.</p>
+            <ul className="guest-points">
+              <li>A fit score with a quote from your resume for every requirement</li>
+              <li>An ATS-ready resume for each job, checked for invented claims</li>
+              <li>A cover letter reviewed by a critic, ready for you to edit</li>
+            </ul>
+          </div>
+        )}
         <Outlet />
       </main>
     </>

@@ -13,8 +13,12 @@
   --bad: #a3202a;
   --bad-bg: #fde6e8;
   --info-bg: #e8f0ff;
-  --radius: 10px;
-  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --radius: 12px;
+  --shadow: 0 1px 2px rgb(16 24 40 / 6%), 0 1px 3px rgb(16 24 40 / 8%);
+  --shadow-lg: 0 12px 32px -12px rgb(16 24 40 / 18%);
+  --surface-2: #eef1f5;
+  font-family: Inter, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
   line-height: 1.5;
   color: var(--text);
   background: var(--bg);
@@ -161,9 +165,9 @@ select {
   width: 100%;
   font: inherit;
   padding: 0.55rem 0.7rem;
-  border: 1px solid #aab3bf;
+  border: 1px solid color-mix(in srgb, var(--muted) 45%, var(--border));
   border-radius: 8px;
-  background: #fff;
+  background: var(--card);
   color: var(--text);
 }
 
@@ -218,7 +222,7 @@ button:disabled {
 }
 
 .secondary {
-  background: #fff;
+  background: var(--card);
   color: var(--text);
   border-color: var(--border);
 }
@@ -310,7 +314,7 @@ button:disabled {
   border-radius: 999px;
   font-size: 0.8rem;
   font-weight: 600;
-  background: #eceff3;
+  background: var(--surface-2);
   color: var(--text);
 }
 
@@ -386,7 +390,7 @@ button:disabled {
 }
 
 .stepper button {
-  background: #eceff3;
+  background: var(--surface-2);
   color: var(--muted);
   margin: 0;
 }
@@ -537,6 +541,16 @@ details summary {
 }
 
 /* Resume step: PDF preview / text editor toggle */
+.plain-list {
+  list-style: none;
+  padding-left: 0;
+  margin: 0.25rem 0 0.75rem;
+}
+
+.plain-list li {
+  margin: 0.2rem 0;
+}
+
 .retailor {
   margin: 1.5rem 0;
   padding: 1rem;
@@ -595,4 +609,391 @@ details summary {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: #525659; /* matches the browser PDF viewer, avoids a white flash */
+}
+
+
+/* ===================================================================================================
+   Visual refresh: header, stepper, workspace layout, report sidebar, buttons, forms, dark mode.
+   (Later rules intentionally override the basic ones above.)
+   =================================================================================================== */
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: color-mix(in srgb, var(--card) 88%, transparent);
+  backdrop-filter: saturate(1.4) blur(8px);
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.brand-mark {
+  width: 28px;
+  height: 28px;
+}
+
+.brand-mark rect {
+  fill: var(--primary);
+}
+
+.brand-mark path {
+  fill: none;
+  stroke: #fff;
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.topbar nav a,
+.topbar nav .link-button {
+  padding: 0.35rem 0.6rem;
+  border-radius: 8px;
+  border-bottom: none;
+}
+
+.topbar nav a:hover,
+.topbar nav .link-button:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.topbar nav a.active {
+  border-bottom: none;
+  background: var(--info-bg);
+  color: var(--primary-dark);
+}
+
+.card,
+.auth-card {
+  box-shadow: var(--shadow);
+  border-color: color-mix(in srgb, var(--border) 80%, transparent);
+}
+
+.auth-card {
+  padding: 2rem;
+}
+
+/* Guest pages: a short pitch above the login/signup card */
+.guest-intro {
+  max-width: 560px;
+  margin: 1.5rem auto 0;
+  text-align: center;
+}
+
+.guest-title {
+  font-size: 1.35rem;
+  font-weight: 700;
+  line-height: 1.3;
+  margin: 0 0 0.75rem;
+}
+
+.guest-points {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 0.35rem;
+  color: var(--muted);
+}
+
+.guest-points li::before {
+  content: '✓ ';
+  color: var(--good);
+  font-weight: 700;
+}
+
+/* Buttons */
+button,
+.button {
+  transition: background-color 0.15s, box-shadow 0.15s, transform 0.05s, border-color 0.15s;
+}
+
+button:not(:disabled):active,
+.button:active {
+  transform: translateY(1px);
+}
+
+.primary:not(:disabled):hover {
+  box-shadow: 0 4px 12px -4px color-mix(in srgb, var(--primary) 60%, transparent);
+}
+
+.secondary:not(:disabled):hover,
+a.button.secondary:hover {
+  border-color: var(--primary);
+  color: var(--primary-dark);
+}
+
+/* Form controls */
+input:not([type='radio']):not([type='checkbox']):not([type='file']),
+textarea,
+select {
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+input:not([type='radio']):not([type='checkbox']):not([type='file']):focus,
+textarea:focus,
+select:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 18%, transparent);
+  outline: none;
+}
+
+/* Stepper: numbered circles joined by a line */
+.stepper {
+  gap: 0;
+  margin: 1.25rem 0 0.5rem;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+}
+
+.stepper button,
+.stepper button.done,
+.stepper button.active {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: transparent;
+  color: var(--muted);
+  padding: 0.5rem 0.75rem;
+  border-radius: 999px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.stepper button:not(:last-child)::after {
+  content: '';
+  display: block;
+  width: 2.5rem;
+  height: 2px;
+  margin-left: 0.5rem;
+  background: var(--border);
+}
+
+.stepper button.done:not(:last-child)::after {
+  background: color-mix(in srgb, var(--primary) 45%, var(--border));
+}
+
+.step-num {
+  display: grid;
+  place-items: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  background: var(--card);
+  font-size: 0.85rem;
+  flex-shrink: 0;
+}
+
+.stepper button.done {
+  color: var(--text);
+}
+
+.stepper button.done .step-num {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.stepper button.active {
+  color: var(--primary-dark);
+}
+
+.stepper button.active .step-num {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: #fff;
+}
+
+.stepper button:not(:disabled):hover {
+  background: var(--surface-2);
+}
+
+.stepper button:disabled {
+  opacity: 0.6;
+}
+
+/* Resume tab: document on the left, checks in a sticky sidebar */
+.container:has(.workspace) {
+  max-width: 1320px;
+}
+
+.workspace {
+  display: grid;
+  gap: 1.5rem;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@media (min-width: 1100px) {
+  .workspace {
+    grid-template-columns: minmax(0, 1.6fr) minmax(320px, 1fr);
+    align-items: start;
+  }
+
+  .workspace-side {
+    position: sticky;
+    top: 5rem;
+    max-height: calc(100vh - 6rem);
+    overflow-y: auto;
+    padding-right: 0.25rem;
+  }
+}
+
+.workspace-side {
+  display: grid;
+  gap: 0.75rem;
+  align-content: start;
+}
+
+.report-side {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.report-summary {
+  background: var(--surface-2);
+  border-radius: var(--radius);
+  padding: 0.9rem 1rem;
+}
+
+.report-summary p {
+  margin: 0.4rem 0 0;
+}
+
+.report-block {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.75rem 0.9rem;
+}
+
+.report-block h4 {
+  margin: 0 0 0.5rem;
+  font-size: 0.9rem;
+}
+
+.report-block summary {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.report-block ul:not(.plain-list) {
+  margin: 0.5rem 0 0;
+  padding-left: 1.2rem;
+}
+
+.checklist {
+  display: grid;
+  gap: 0.15rem;
+  font-size: 0.92rem;
+}
+
+/* Coverage meter (native <progress>: no inline styles, so it works with the strict CSP) */
+.meter {
+  width: 100%;
+  height: 0.6rem;
+  margin-top: 0.5rem;
+  appearance: none;
+  border: none;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--border);
+}
+
+.meter::-webkit-progress-bar {
+  background: var(--border);
+  border-radius: 999px;
+}
+
+.meter::-webkit-progress-value {
+  background: linear-gradient(90deg, var(--primary), #19a974);
+  border-radius: 999px;
+}
+
+.meter::-moz-progress-bar {
+  background: linear-gradient(90deg, var(--primary), #19a974);
+  border-radius: 999px;
+}
+
+.retailor {
+  background: color-mix(in srgb, var(--info-bg) 55%, var(--card));
+  border-color: color-mix(in srgb, var(--primary) 25%, var(--border));
+}
+
+.next-step {
+  margin-top: 1.5rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--border);
+}
+
+.next-step h3 {
+  margin-top: 0;
+}
+
+/* Tables and history */
+.table tbody tr:hover {
+  background: var(--surface-2);
+}
+
+.history-item {
+  transition: box-shadow 0.15s, transform 0.15s, border-color 0.15s;
+}
+
+.history-item:hover {
+  box-shadow: var(--shadow-lg);
+  border-color: color-mix(in srgb, var(--primary) 35%, var(--border));
+  transform: translateY(-1px);
+}
+
+.chip {
+  border-radius: 999px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button,
+  .button,
+  .history-item {
+    transition: none;
+  }
+
+  .history-item:hover {
+    transform: none;
+  }
+}
+
+/* Dark mode follows the operating system */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f141b;
+    --card: #161d27;
+    --text: #e6eaf0;
+    --muted: #9aa5b4;
+    --border: #2a3441;
+    --surface-2: #1d2531;
+    --primary: #5b8cff;
+    --primary-dark: #8fb0ff;
+    --good: #6fdc8c;
+    --good-bg: #173524;
+    --ok: #f3c46b;
+    --ok-bg: #3a2e14;
+    --bad: #ff8a93;
+    --bad-bg: #3d1a1e;
+    --info-bg: #1b2a47;
+    --shadow: 0 1px 2px rgb(0 0 0 / 40%);
+    --shadow-lg: 0 12px 32px -12px rgb(0 0 0 / 60%);
+    color-scheme: dark;
+  }
+
+  input,
+  textarea,
+  select {
+    background: var(--surface-2);
+    color: var(--text);
+  }
+
+  .stepper button.active .step-num {
+    color: #0f141b;
+  }
 }
