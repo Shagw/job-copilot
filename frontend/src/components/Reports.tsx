@@ -5,6 +5,7 @@ import type {
   ParsedJob,
   TailorReport,
   TraceStep,
+  RecruiterCheck,
 } from '../api/types'
 import { scoreClass } from '../lib/format'
 import { Field, ListEditor } from './ui'
@@ -123,27 +124,55 @@ export function TailorReportView({ report }: { report: TailorReport }) {
   const before = report.coverage_before
   const after = report.coverage_after
   return (
-    <div className="report">
-      <p>
-        <strong>Keyword coverage:</strong> {before.percent}% → {after.percent}% of all job keywords ·{' '}
-        <strong>{after.supported_percent}%</strong> of the ones your resume supports
-        {report.target_met ? (
-          <span className="badge good"> checks passed</span>
-        ) : (
-          <span className="badge ok"> please review</span>
-        )}
-      </p>
-      <p>
-        Covered: <Chips items={after.covered} kind="good" />
-      </p>
-      {after.missing_supported.length > 0 && (
-        <p>
-          In your resume, but missing from the tailored version: <Chips items={after.missing_supported} kind="ok" />
+    <div className="report report-side">
+      <div className="report-summary">
+        <div className="row-between">
+          <strong>Keyword coverage:</strong>
+          {report.target_met ? (
+            <span className="badge good">checks passed</span>
+          ) : (
+            <span className="badge ok">please review</span>
+          )}
+        </div>
+        <progress className="meter" max={100} value={after.supported_percent}
+          aria-label={`${after.supported_percent}% of the keywords your resume supports`} />
+        <p className="small">
+          <strong>{after.supported_percent}%</strong> of the keywords your resume supports ·{' '}
+          {before.percent}% → {after.percent}% of all job keywords
         </p>
+      </div>
+      <div className="report-block">
+        <h4>Covered</h4>
+        <Chips items={after.covered} kind="good" />
+      </div>
+      {after.missing_supported.length > 0 && (
+        <div className="report-block">
+          <h4>In your resume, but missing from the tailored version</h4>
+          <Chips items={after.missing_supported} kind="ok" />
+        </div>
       )}
-      <p>
-        Not added (no evidence in your resume): <Chips items={after.missing_unsupported} kind="bad" />
-      </p>
+      <div className="report-block">
+        <h4>Not added (no evidence in your resume)</h4>
+        <Chips items={after.missing_unsupported} kind="bad" />
+      </div>
+      {!!report.keywords_added?.length && (
+        <div className="report-block">
+          <h4>Keywords added</h4>
+          <ul className="plain-list">
+            {report.keywords_added.map((k) => (
+              <li key={k.keyword}>
+                <span className="chip chip-good">{k.keyword}</span> <span className="muted small">in {k.where}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {!!report.metrics_dropped?.length && (
+        <div className="alert alert-warn" role="alert">
+          <strong>These results from your resume are missing from the tailored version:</strong>{' '}
+          {report.metrics_dropped.join(', ')}. Put them back in the editor or ask for it in a re-tailor.
+        </div>
+      )}
       {!report.claims.ok && (
         <div className="alert alert-warn" role="alert">
           <strong>Check these lines before using the resume:</strong>
@@ -156,8 +185,42 @@ export function TailorReportView({ report }: { report: TailorReport }) {
           </ul>
         </div>
       )}
-      {report.changes.length > 0 && <BulletList title="What the agent changed" items={report.changes} />}
+      {!!report.recruiter?.length && <RecruiterCheckView checks={report.recruiter} />}
+      {report.changes.length > 0 && (
+        <details className="report-block">
+          <summary>What the agent changed ({report.changes.length})</summary>
+          <ul>
+            {report.changes.map((c, n) => (
+              <li key={n}>{c}</li>
+            ))}
+          </ul>
+        </details>
+      )}
       {report.note && <p className="hint">ℹ️ {report.note}</p>}
+    </div>
+  )
+}
+
+function RecruiterCheckView({ checks }: { checks: RecruiterCheck[] }) {
+  const passed = checks.filter((c) => c.ok).length
+  return (
+    <div className="report-block">
+      <h4>
+        Recruiter check{' '}
+        <span className="muted small">
+          ({passed}/{checks.length} passed, what a recruiter notices in the first 15 seconds)
+        </span>
+      </h4>
+      <ul className="plain-list checklist">
+        {checks.map((c) => (
+          <li key={c.id}>
+            <span aria-hidden="true">{c.ok ? '✅' : '⚠️'}</span>{' '}
+            <span className="sr-only">{c.ok ? 'Passed: ' : 'Needs work: '}</span>
+            {c.label}
+            {!c.ok && c.detail && <span className="muted small"> — {c.detail}</span>}
+          </li>
+        ))}
+      </ul>
     </div>
   )
 }

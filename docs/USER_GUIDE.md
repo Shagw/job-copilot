@@ -58,7 +58,8 @@ defend in an interview. Then click **Tailor my resume**.
 
 ## 6. Step 3 – Resume: review, improve, repeat
 
-You get a tailored copy of your resume shown as a **PDF preview**, plus a report:
+You get a tailored copy of your resume shown as a **PDF preview**. On a wide screen the checks sit in a panel on
+the right that stays in view while you scroll:
 
 | Report item | Meaning |
 |-------------|---------|
@@ -66,6 +67,9 @@ You get a tailored copy of your resume shown as a **PDF preview**, plus a report
 | **In your resume, but missing from the tailored version** | Keywords you have that got left out. Normally empty; if not, ask for them in a re-tailor. |
 | **Not added (no evidence in your resume)** | Keywords the job wants that neither your resume nor your notes support. They're left out on purpose. Add a note if you really have them. |
 | **Check these lines before using the resume** | Lines the checks couldn't match to your resume (a new number or skill). Fix or remove them. |
+| **Keywords added** | Job keywords the tailored version now shows, and the section they went into. |
+| **These results from your resume are missing** | Numbers from your resume (40%, 1M+ users, $2M) that the tailored version lost. Put them back or ask for it in a re-tailor. |
+| **Recruiter check** | What a recruiter notices in 15 seconds: top skills near the top, measurable impact, length, no keyword stuffing, and (when enabled) whether you look relevant fast, the summary is specific, the current role is clear, bullets are concise and formatting is clean. Each ⚠️ says what to fix. |
 
 **Edit it yourself.** Click **Edit text**, change anything, then **Save & preview**. Keep headings in CAPITALS and
 start bullets with "- " for the best PDF layout.

@@ -266,6 +266,28 @@ describe('session wizard', () => {
     })
   })
 
+  it('shows keywords added with their place, lost results and the recruiter check', async () => {
+    loggedIn()
+    const tailored = 'Alice Example\n\nEXPERIENCE\n- Built APIs in Python with FastAPI at Acme for three years'
+    f.on('GET', '/sessions/7', { body: session({ fit_result: FIT, tailored_resume: tailored, current_step: 'tailored',
+      tailor_report: {
+        coverage_before: { total: 2, covered: [], missing_supported: [], missing_unsupported: [], percent: 0, supported_percent: 0 },
+        coverage_after: { total: 2, covered: ['React'], missing_supported: [], missing_unsupported: [], percent: 50, supported_percent: 100 },
+        claims: { ok: true, issues: [] }, changes: [], target_met: true,
+        keywords_added: [{ keyword: 'React', where: 'Experience: Acme Corp (2021-2024)' }],
+        metrics_dropped: ['40%'],
+        recruiter: [
+          { id: 'measurable_impact', label: 'Shows measurable impact', ok: true, by: 'code' },
+          { id: 'relevant_fast', label: 'Relevant within 15 seconds', ok: false, detail: 'Name the target role', by: 'jev' },
+        ] } }) })
+    renderApp('/sessions/7')
+
+    expect(await screen.findByText('in Experience: Acme Corp (2021-2024)')).toBeInTheDocument()
+    expect(screen.getByText(/These results from your resume are missing/).closest('[role="alert"]')).toHaveTextContent('40%')
+    expect(screen.getByText(/1\/2 passed/)).toBeInTheDocument()
+    expect(screen.getByText('Needs work:').parentElement).toHaveTextContent('Relevant within 15 seconds — Name the target role')
+  })
+
   it('re-tailors the current text with requested changes, again and again', async () => {
     loggedIn()
     const v0 = 'Alice Example\n\nEXPERIENCE\n- Built APIs in Python with FastAPI at Acme for three years'

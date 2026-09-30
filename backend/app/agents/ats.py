@@ -131,3 +131,79 @@ def verify_claims(draft: str, original: str, keywords: list[str], max_issues: in
                 issues.append(ClaimIssue(type="unsupported_skill",
                                          detail=f"'{kw}' is not in the original resume", line=line[:200]))
     return ClaimReport(ok=not issues, issues=issues[:max_issues])
+
+
+# --- Quantified results -----------------------------------------------------------------------------------
+# A "metric" is a number that shows impact: 40%, $2M, 3x, 10,000, 1M+. Years (2021), phone numbers and dates
+# aren't metrics. Tailoring should never lose one: they are what recruiters look for first.
+_METRIC = re.compile(
+    r"(?<![\w.])(?:[$₹€£]\s?)?\d[\d,]*(?:\.\d+)?\s?(?:%|x\b|[kKMB]\+?(?![a-zA-Z])|\+|(?:million|billion|lakh|crore)s?\b)?",
+)
+_YEAR = re.compile(r"^(?:19|20)\d{2}$")
+_UNIT = {"%": "%", "x": "x", "k": "k", "m": "m", "b": "b", "million": "m", "billion": "b", "lakh": "lakh", "crore": "crore"}
+
+
+def _metric_key(token: str) -> tuple[str, str]:
+    """("40", "%") for "40%", ("2", "m") for "$2M", ("10000", "") for "10,000"."""
+    m = re.match(r"[$₹€£]?\s?([\d,]+(?:\.\d+)?)\s?([a-zA-Z%]*)", token)
+    if not m:
+        return "", ""
+    unit = m.group(2).lower().rstrip("s")
+    return m.group(1).replace(",", ""), _UNIT.get(unit, "")
+
+
+def metrics_in(text: str) -> dict[str, str]:
+    """{key: as written} for impact numbers, e.g. {"40%": "40%", "2m": "$2M", "10000": "10,000"}."""
+    out: dict[str, str] = {}
+    for line in text.splitlines():
+        if "@" in line or "http" in line or re.search(r"\+?\d[\d\s-]{8,}\d", line):
+            continue  # contact lines: phone numbers, emails, links
+        for m in _METRIC.finditer(line):
+            token = m.group(0).strip()
+            value, unit = _metric_key(token)
+            if not value or (_YEAR.match(value) and not unit):
+                continue
+            has_unit = bool(unit) or token.endswith("+") or token[0] in "$₹€£"
+            if has_unit or (value.isdigit() and int(value) >= 10):
+                out.setdefault(value + unit, token)
+    return out
+
+
+def dropped_metrics(draft: str, reference: str) -> list[str]:
+    """Quantified results in `reference` that no longer appear anywhere in `draft`.
+
+    "40%" also counts as kept if "40" is still there (e.g. "40 percent"); small numbers need their unit
+    ("1M" isn't kept by a stray "1").
+    """
+    kept = set(metrics_in(draft))
+    plain = {n for n in numbers_in(draft) if n.replace(".", "").isdigit() and float(n) >= 10}
+    return [shown for key, shown in metrics_in(reference).items()
+            if key not in kept and re.sub(r"[^\d.]", "", key) not in plain]
+
+
+# --- Where keywords live ----------------------------------------------------------------------------------
+_DATED = re.compile(r"(?:19|20)\d{2}")
+
+
+def _is_section(line: str) -> bool:
+    t = line.strip().rstrip(":")
+    return bool(t) and t.isupper() and len(t.split()) <= 5 and not t.startswith(("-", "•"))
+
+
+def keyword_places(text: str, keywords: list[str]) -> dict[str, str]:
+    """Where each keyword first appears: "SUMMARY", "SKILLS", "EXPERIENCE: Acme Corp - Backend Engineer"."""
+    places: dict[str, str] = {}
+    section, role = "TOP", ""
+    for line in text.splitlines():
+        t = line.strip()
+        if not t:
+            continue
+        if _is_section(t):
+            section, role = t.rstrip(":").title(), ""
+            continue
+        if _DATED.search(t) and not t.startswith(("-", "•")) and len(t) < 120:
+            role = t.split("|")[0].strip()[:60]
+        for kw in keywords:
+            if kw not in places and has_keyword(t, kw):
+                places[kw] = f"{section}: {role}" if role and section.lower().startswith(("experience", "work", "employment", "project")) else section
+    return places

@@ -80,6 +80,20 @@ export interface TailorReport {
   revision?: number
   /** Every note given so far (trusted facts for later revisions). */
   notes?: string[]
+  /** Keywords covered now but not before, and where they are in the tailored resume. */
+  keywords_added?: { keyword: string; where: string }[]
+  /** Quantified results from the resume that the tailored version lost. */
+  metrics_dropped?: string[]
+  /** 15-second recruiter screen: code checks, plus Jev judgments when enabled. */
+  recruiter?: RecruiterCheck[]
+}
+
+export interface RecruiterCheck {
+  id: string
+  label: string
+  ok: boolean
+  detail?: string | null
+  by: 'code' | 'jev'
 }
 
 export interface CoverLetterRound {

@@ -182,14 +182,15 @@ def test_skills_stated_in_notes_may_be_added_and_are_not_flagged(resume_index):
     notes = "Please add Kubernetes and Terraform: I used both on my last project."
     with_k8s = TAILORED + "\n- Skills: Kubernetes, Terraform"
     fit = FitResult(score=50, verdict="Moderate fit", requirements=[], gaps=["Kubernetes", "Django"], advice=[])
-    llm = FakeLLM(f"<resume>\n{with_k8s}\n</resume>")
+    llm = FakeLLM(*[f"<resume>\n{with_k8s}\n</resume>"] * 3)  # (the recruiter check may ask for a fix)
     text, report, _ = tailor_resume(llm, JOB, RESUME, resume_index, 1, fit, notes)
 
     user_msg = llm.calls[0][0][1]["content"]
     assert "never add these): Django\n" in user_msg + "\n"  # only what neither resume nor notes support
     assert "Kubernetes" in user_msg.split("show each one where it is true):")[1].split("\n")[0]
     assert "do NOT claim these): Django" in user_msg  # the Kubernetes gap is covered by the notes
-    assert text == with_k8s and len(llm.calls) == 1  # no "fix" call stripping the requested keywords
+    assert text == with_k8s  # nothing strips the requested keywords
+    assert all("Kubernetes' is not in" not in m[0][-1]["content"] for m in llm.calls[1:])  # never called invented
     assert report.claims.ok and "Kubernetes" in report.coverage_after.covered
 
 
@@ -335,21 +336,21 @@ def test_retailor_again_and_again_revises_the_current_version(logged_in, use_llm
     # Round 1: the user edited the text, then asks for a keyword their resume lacks.
     edited = TAILORED + "\n\nINTERESTS\nOpen-source contributor"
     v1 = edited + "\n\nSKILLS\n- Kubernetes"
-    llm = use_llm(f"<resume>\n{v1}\n</resume>\n<changes>\n- Added Kubernetes\n</changes>")
+    llm = use_llm(*[f"<resume>\n{v1}\n</resume>\n<changes>\n- Added Kubernetes\n</changes>"] * 3)
     r = logged_in.post(f"/sessions/{s['id']}/tailor",
                        json={"current_resume": edited, "instructions": "Add Kubernetes, I use it daily"})
     assert r.status_code == 200, r.text
     body = r.json()
     prompt = llm.calls[0][0][1]["content"]
     assert "REVISE" in prompt and "<current_tailored_resume>" in prompt and "Open-source contributor" in prompt
-    assert body["tailored_resume"] == v1 and len(llm.calls) == 1  # nothing flagged, no fix call
+    assert body["tailored_resume"] == v1
     report = body["tailor_report"]
     assert report["revision"] == 1 and report["notes"] == ["Add Kubernetes, I use it daily"] and report["claims"]["ok"]
     assert [t["tool"] for t in body["agent_trace"]["tailor"]][0] == "revise with your requests"
 
     # Round 2: a different request. Kubernetes (from round 1's note) is still trusted, Terraform is not.
     v2 = v1.replace("SKILLS", "TECHNICAL SKILLS") + "\n- Terraform"
-    llm = use_llm(f"<resume>\n{v2}\n</resume>", f"<resume>\n{v2}\n</resume>")
+    llm = use_llm(*[f"<resume>\n{v2}\n</resume>"] * 3)
     body = logged_in.post(f"/sessions/{s['id']}/tailor",
                           json={"current_resume": v1, "instructions": "Rename the skills section"}).json()
     assert "Add Kubernetes, I use it daily" in llm.calls[0][0][1]["content"]  # earlier notes are carried over

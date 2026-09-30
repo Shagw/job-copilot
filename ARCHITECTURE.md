@@ -71,7 +71,7 @@ Two kinds of model, each used for what it's good at:
 |------|-----------|-----|----------------|
 | Job Parser | 1 (JSON mode) | — | shortens long postings, validates the output |
 | Fit Scorer | 0 with Jev; else 1 (+1 only for skipped requirements) | 1 call: per requirement a match `choice` + a `noul` per candidate line | retrieves evidence lines, verifies quotes, years check, score, summary/strengths/advice |
-| Resume Tailor | 1 draft + at most 2 fixes | 1 call: a `noul` per changed line ("supported by the original?") | keyword guidance in the prompt, coverage + claim checks, keeps a fix only if it's strictly better, adds true-but-missing keywords itself |
+| Resume Tailor | 1 draft + at most 2 fixes | per check: a `noul` per changed line ("supported?") + a recruiter screen (6 `noul`s) | keyword guidance with where each keyword is backed, coverage + claim checks, lost-metric check, recruiter screen, keeps a fix only if it's strictly better, adds true-but-missing keywords itself |
 | Cover Letter | 1 per round (max 3) | Critic: 1 `score` + 6 `noul` checks per round | hard lint (invented numbers, placeholders, length) vetoes approval |
 
 Measured live on the same real job and resume with Groq only: **~67k → ~15k tokens** for Fit + Tailor + Letter.
@@ -106,8 +106,21 @@ doesn't treat its state as hostile, so it never decides alone: code thresholds a
   *missing, unsupported* (→ never add). Handles `CI/CD`, `C++`, `Node.js`, plurals and aliases (`k8s`).
 - The claim check flags numbers (digits and number words) and job skills the original resume lacks.
 - Jev adds a semantic check regexes can't do: invented responsibilities ("owned incident response").
-- Up to 2 fix rounds; a fix is kept only if it's strictly better (an unsupported claim counts double a missing
-  keyword). Keywords the candidate has that the model still leaves out are added to the skills section by code.
+- **Writing rules** in the prompt: action verb + what + technology + impact bullets, the job's exact terms where
+  true, a specific summary (target role, top matching skills, one result), skills grouped by category with the
+  most relevant first, same depth and length.
+- **Quantified results are protected** (`ats.metrics_in` / `dropped_metrics`): every impact number in the
+  source (40%, $2M, 1M+, 10,000; not years or phone numbers) must survive. Lost ones go into the fix round and
+  the report.
+- **Recruiter screen** (`agents/recruiter.py`, no Groq tokens). Code: top job skills in the first third,
+  measurable impact (no fewer quantified bullets than the original), length, stuffing (whole-word counts vs. the
+  original). Jev (optional, one call): relevant within 15 seconds, specific summary, natural keywords, clear
+  current role, concise bullets, clean formatting. Specific questions on purpose: a vague "would it be
+  rejected?" scored ~0.8 for almost any resume. Failed checks feed the fix round and the report.
+- **Keyword placement** (`ats.keyword_places`): the prompt says where each supported keyword is backed (Skills,
+  Summary, "Experience: <role>"); the report lists keywords added and the section they landed in.
+- Up to 2 fix rounds; a fix is kept only if it's strictly better (weighted: unsupported claim 3, lost metric 2,
+  missing keyword or failed recruiter check 1). Keywords the candidate has that the model still leaves out are added to the skills section by code.
 - **The candidate's notes are facts.** Skills they state ("I used MongoDB in side projects") move from
   "never add" to "may add", and every check (regex and Jev) accepts them. Jev gets the resume, notes and
   current version as separate state fields.
@@ -115,7 +128,8 @@ doesn't treat its state as hostile, so it never decides alone: code thresholds a
   hand-edited) version with the user's requests (format, a section, the summary, keywords) instead of starting
   over. Notes from every round are kept in the report and stay trusted; the current version counts as a source,
   so the checks judge only what the revision adds.
-- The report (coverage before/after, remaining issues, changes, revision, notes) is recomputed on the final text.
+- The report (coverage before/after, remaining issues, changes, keywords added and where, lost metrics, recruiter
+  checks, revision, notes) is recomputed on the final text.
 
 **Writer ⇄ Critic.** Each round: one Writer call → code lint (hard: invented numbers, placeholders, length;
 soft: clichés, unbacked skills) → Critic. The Jev Critic's quality `score` maps to 2-10 and its yes/no checks
@@ -237,7 +251,8 @@ job-copilot/
 │   │   ├── auth/        security.py (bcrypt, JWT), otp.py, deps.py, rate_limit.py
 │   │   ├── routers/     auth.py, resume.py, sessions.py, admin.py
 │   │   ├── agents/      base.py (ReAct loop), tools.py, ats.py (coverage + claim checks), job_parser.py,
-│   │   │                fit_scorer.py, resume_tailor.py, cover_writer.py, cover_critic.py
+│   │   │                fit_scorer.py, resume_tailor.py, recruiter.py (recruiter screen), cover_writer.py,
+│   │   │                cover_critic.py
 │   │   ├── llm/         key_pool.py, groq_client.py, jev_client.py (TypeSafe Jev, optional)
 │   │   ├── rag/         embeddings.py, store.py (chunking + per-user ChromaDB index)
 │   │   ├── agents/…     + shorten.py (fit long inputs to the token budget)
@@ -263,13 +278,17 @@ job-copilot/
   after its agent has run. Each tab shows the agent output in editable fields plus its report and a
   collapsible "How the agent got here" trace; the user's edits are sent with the approval that starts
   the next agent.
-- The Resume tab shows the tailored resume as a **PDF preview** by default, with an "Edit text" toggle.
+- The Resume tab is a two-column workspace on wide screens: the document (PDF preview by default, "Edit text"
+  toggle) and "Ask for changes" on the left, a sticky sidebar with the checks (coverage meter, keywords, recruiter
+  checklist, changes) on the right, and a "Next: cover letter" section below.
   "Save & preview" PATCHes the text, then reloads the PDF (a cache-busting `v` parameter).
 - **Ask for changes** on the Resume tab sends the current text (including unsaved edits) plus the request to
   `/tailor` as `current_resume`; the result replaces the text, the preview reloads and the box clears for the
   next request. The heading shows the revision count. It can be repeated any number of times.
 - Long agent runs show an elapsed-seconds timer. A 503 "AI is busy" shows a live retry countdown.
 - A job link the backend can't fetch (LinkedIn, JS-only pages) switches the form to paste mode.
+- Visuals: a stepper with numbered circles, card shadows, and dark mode via `prefers-color-scheme`. No inline
+  styles (the coverage meter is a native `<progress>`), so the strict CSP holds.
 - Accessibility: labelled inputs with hints, `role="alert"`/`status` live regions, tab semantics,
   skip link, visible focus, reduced-motion support.
 
@@ -297,11 +316,11 @@ permissions policy and HSTS in production. Startup refuses a `JWT_SECRET` under 
 
 ## 9c. Testing
 
-- **Backend (252):** offline, with a scripted `FakeLLM`, a `FakeJev` and a fake embedder. Covers the auth flows,
+- **Backend (262):** offline, with a scripted `FakeLLM`, a `FakeJev` and a fake embedder. Covers the auth flows,
   OTP limits, RAG isolation between users, KeyPool failover, agent loops (text tool calls, retries, step limits),
   scoring and grounding, Jev client contract and fallbacks, ATS/claim checks, notes as facts, repeated
   re-tailoring, shortening, URL fetcher SSRF, archive and exports.
-- **Frontend (29):** component and flow tests with mocked fetch.
+- **Frontend (30):** component and flow tests with mocked fetch.
 - **E2E (4):** real Chromium against the production build and real Groq. Covers the full journey, cookie and
   security headers, password reset and mobile layout. Fails on any JS error, CSP violation or unexpected failed
   request. It uses full Chromium because the default headless shell has no PDF viewer.

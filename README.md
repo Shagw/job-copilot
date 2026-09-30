@@ -20,7 +20,7 @@ Docs: [User guide](docs/USER_GUIDE.md) (how to use the app) · [Fork guide](docs
 |------|-------|--------------|-----------|
 | 1. Job | Job Parser (single structured LLM call) | Title, company, must-haves, nice-to-haves, ATS keywords | Fix anything it got wrong |
 | 2. Fit | Fit Scorer (code retrieval + one Jev or Groq judgment call) | Score 0-100, per-requirement match with a **verified quote** from your resume, gaps, advice | Add notes for the tailor |
-| 3. Resume | Resume Tailor (draft → code + Jev checks → up to 2 fixes); re-tailor with your requests as often as you like | Tailored resume shown as a PDF preview, keyword coverage before/after, anything that still needs checking | Edit the text, re-preview |
+| 3. Resume | Resume Tailor (draft → code + Jev checks → up to 2 fixes); re-tailor with your requests as often as you like | Tailored resume (PDF preview) next to its checks: keyword coverage, keywords added and where, lost numbers, a 15-second recruiter check | Edit the text, re-preview |
 | 4. Letter | Writer ⇄ Critic (Jev or Groq critic, up to 3 rounds) | Cover letter, critic score and history | Edit, set status, download DOCX |
 
 Plus: accounts with email OTP verification, forgot password, 3-day history (then archived, never deleted),
@@ -98,8 +98,8 @@ Run **one** process: the key-cooldown state and rate limiters are in memory.
 ## Tests
 
 ```bash
-cd backend && .venv/bin/python -m pytest -q     # 252 tests, ~50s, no network (fake LLM + fake embedder)
-cd frontend && npm test                         # 29 component/flow tests (fetch mocked)
+cd backend && .venv/bin/python -m pytest -q     # 262 tests, ~50s, no network (fake LLM + fake embedder)
+cd frontend && npm test                         # 30 component/flow tests (fetch mocked)
 cd frontend && npm run typecheck && npm run lint
 cd frontend && npm run e2e                      # real Chromium + real backend + real Groq, ~60s
 ```
@@ -211,7 +211,7 @@ TLS verification, which blocks DNS rebinding. Every redirect is re-checked. Site
 
 ### 9. Testing LLM apps
 - **Unit/integration tests use a scripted fake LLM** (`FakeLLM` returns tool calls or answers in order), so
-  252 backend tests run offline in under a minute and cover failover, bad JSON, empty answers and step limits.
+  262 backend tests run offline in under a minute and cover failover, bad JSON, empty answers and step limits.
 - **Live runs against real Groq found the bugs that mocks couldn't:** the 8K-token 413s, an empty final answer,
   the merged evidence quotes, and the spelled-out numbers.
 - **Real-browser E2E found UI and test bugs:** a label (`Cover letter`) that matched two fields, and navigation

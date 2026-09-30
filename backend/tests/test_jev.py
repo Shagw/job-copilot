@@ -182,6 +182,8 @@ def test_tailor_jev_flags_unsupported_changed_line_and_triggers_fix(resume_index
                                      "- Owned the company-wide incident response process")
 
     def answer(key, q, state):
+        if "line" not in q["instructions"]:  # recruiter check: all fine here
+            return {"type": "noul", "noul": 0.9 if key == "relevant_fast" else 0.1}
         return {"type": "noul", "noul": 0.05 if "incident response" in q["instructions"]["line"] else 0.95}
 
     jev = FakeJev(answer)
@@ -192,6 +194,7 @@ def test_tailor_jev_flags_unsupported_changed_line_and_triggers_fix(resume_index
     assert jev.requests[0][0] == {"original_resume": RESUME}
     unchanged = "Built REST APIs in Python with FastAPI serving 2M requests per day"
     assert all(q["instructions"]["line"] != unchanged for q in jev.requests[0][1].values())  # only changed lines
+    assert "relevant_fast" in jev.requests[1][1]  # then the recruiter check
 
 
 def test_tailor_keeps_working_when_jev_is_down(resume_index):
