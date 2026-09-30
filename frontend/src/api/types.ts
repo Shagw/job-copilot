@@ -86,6 +86,30 @@ export interface TailorReport {
   metrics_dropped?: string[]
   /** 15-second recruiter screen: code checks, plus Jev judgments when enabled. */
   recruiter?: RecruiterCheck[]
+  /** Fit re-scored on this version (same job, same scorer); null if there was no earlier fit. */
+  fit_after?: FitChange | null
+}
+
+export interface FitChange {
+  before: number
+  after: number
+  verdict: string
+  /** e.g. "Kubernetes: missing → partial" */
+  improved: string[]
+  worse: string[]
+}
+
+export interface ResumeVersion {
+  id: number
+  /** 1 = oldest */
+  number: number
+  source: 'tailor' | 'revise' | 'edit' | 'restore' | 'earlier'
+  note: string | null
+  text: string
+  created_at: string
+  coverage: number | null
+  fit_score: number | null
+  current: boolean
 }
 
 export interface RecruiterCheck {

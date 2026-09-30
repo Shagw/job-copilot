@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { ApiError, api } from '../api/client'
+import type { OnProgress } from '../api/client'
 import type { JobSession, ParsedJob, Status } from '../api/types'
 import { STATUSES } from '../api/types'
 import {
@@ -12,6 +13,7 @@ import {
 } from '../components/Reports'
 import { PdfPreview } from '../components/PdfPreview'
 import { ErrorAlert, Field, Notice, Working } from '../components/ui'
+import { VersionsPanel } from '../components/Versions'
 import { formatDate } from '../lib/format'
 
 type Tab = 'job' | 'fit' | 'resume' | 'letter'
@@ -123,27 +125,29 @@ interface StepProps {
   onDone: (s: JobSession) => void
 }
 
-/** Run an agent call with busy/error state. */
+/** Run an agent call with busy/error state and the live steps it reports. */
 function useAgentRun() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<unknown>(null)
-  async function run(fn: () => Promise<JobSession>, done: (s: JobSession) => void) {
+  const [steps, setSteps] = useState<string[]>([])
+  async function run(fn: (onProgress: OnProgress) => Promise<JobSession>, done: (s: JobSession) => void) {
     setBusy(true)
     setError(null)
+    setSteps([])
     try {
-      done(await fn())
+      done(await fn((message) => setSteps((prev) => [...prev, message])))
     } catch (e) {
       setError(e)
     } finally {
       setBusy(false)
     }
   }
-  return { busy, error, run }
+  return { busy, error, steps, run }
 }
 
 function JobStep({ session, onDone }: StepProps) {
   const [job, setJob] = useState<ParsedJob>(session.parsed_job!)
-  const { busy, error, run } = useAgentRun()
+  const { busy, error, steps, run } = useAgentRun()
   return (
     <>
       <h2>Review what the AI understood</h2>
@@ -156,18 +160,18 @@ function JobStep({ session, onDone }: StepProps) {
       <ErrorAlert error={error} />
       <div className="actions">
         <button type="button" className="primary" disabled={busy}
-          onClick={() => run(() => api.runFit(session.id, job), onDone)}>
+          onClick={() => run((p) => api.runFit(session.id, job, p), onDone)}>
           {session.fit_result ? 'Approve & re-score fit' : 'Approve & score my fit'}
         </button>
       </div>
-      {busy && <Working label="Fit Scorer agent is searching your resume for evidence" />}
+      {busy && <Working label="Fit Scorer agent is searching your resume for evidence" steps={steps} />}
     </>
   )
 }
 
 function FitStep({ session, onDone }: StepProps) {
   const [notes, setNotes] = useState('')
-  const { busy, error, run } = useAgentRun()
+  const { busy, error, steps, run } = useAgentRun()
   return (
     <>
       <h2>How well you fit</h2>
@@ -182,11 +186,11 @@ function FitStep({ session, onDone }: StepProps) {
       <ErrorAlert error={error} />
       <div className="actions">
         <button type="button" className="primary" disabled={busy}
-          onClick={() => run(() => api.runTailor(session.id, notes.trim() || undefined), onDone)}>
+          onClick={() => run((p) => api.runTailor(session.id, notes.trim() || undefined, undefined, p), onDone)}>
           {session.tailored_resume ? 'Re-tailor my resume' : 'Tailor my resume'}
         </button>
       </div>
-      {busy && <Working label="Resume Tailor agent is drafting, checking keywords and verifying claims" />}
+      {busy && <Working label="Resume Tailor agent is drafting, checking keywords and verifying claims" steps={steps} />}
     </>
   )
 }
@@ -198,7 +202,7 @@ function ResumeStep({ session, onDone, onSaved }: StepProps & { onSaved: (s: Job
   const [version, setVersion] = useState(0)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<unknown>(null)
-  const { busy, error, run } = useAgentRun()
+  const { busy, error, steps, run } = useAgentRun()
   const [changes, setChanges] = useState('')
   const retailor = useAgentRun()
   const dirty = text !== session.tailored_resume
@@ -206,7 +210,7 @@ function ResumeStep({ session, onDone, onSaved }: StepProps & { onSaved: (s: Job
 
   /** Revise the current text (including unsaved edits) with the user's requests; repeatable. */
   function reTailor() {
-    retailor.run(() => api.runTailor(session.id, changes.trim(), text), (s) => {
+    retailor.run((p) => api.runTailor(session.id, changes.trim(), text, p), (s) => {
       onSaved(s)
       setText(s.tailored_resume!)
       setChanges('')
@@ -279,8 +283,17 @@ function ResumeStep({ session, onDone, onSaved }: StepProps & { onSaved: (s: Job
                 Re-tailor with these changes
               </button>
             </div>
-            {retailor.busy && <Working label="Resume Tailor is applying your changes and re-checking the resume" />}
+            {retailor.busy && (
+              <Working label="Resume Tailor is applying your changes and re-checking the resume" steps={retailor.steps} />
+            )}
           </section>
+          <VersionsPanel session={session} current={text} dirty={dirty}
+            onRestored={(s) => {
+              onSaved(s)
+              setText(s.tailored_resume!)
+              setVersion((v) => v + 1)
+              setMode('preview')
+            }} />
         </div>
         <aside className="workspace-side" aria-label="Checks on this version">
           {session.tailor_report && <TailorReportView report={session.tailor_report} />}
@@ -304,12 +317,12 @@ function ResumeStep({ session, onDone, onSaved }: StepProps & { onSaved: (s: Job
             Download DOCX
           </a>
           <button type="button" className="primary" disabled={busy || retailor.busy || saving || text.trim().length < 50}
-            onClick={() => run(() => api.runCoverLetter(session.id, text, notes.trim() || undefined), onDone)}>
+            onClick={() => run((p) => api.runCoverLetter(session.id, text, notes.trim() || undefined, p), onDone)}>
             Approve & write cover letter
           </button>
         </div>
         <p className="muted small">Downloads use the last saved version. Approving also saves your edits.</p>
-        {busy && <Working label="Writer and Critic agents are drafting and reviewing your letter" />}
+        {busy && <Working label="Writer and Critic agents are drafting and reviewing your letter" steps={steps} />}
       </section>
     </>
   )

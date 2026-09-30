@@ -1,4 +1,5 @@
 import type {
+  FitChange,
   CoverLetterReport,
   CoverLetterTraceRound,
   FitResult,
@@ -120,6 +121,37 @@ function Chips({ items, kind }: { items: string[]; kind: string }) {
   )
 }
 
+function FitChangeView({ change }: { change: FitChange }) {
+  const delta = change.after - change.before
+  return (
+    <div className="report-block">
+      <h4>Fit on this version</h4>
+      <p>
+        <span className={`badge ${scoreClass(change.before)}`}>{change.before}</span> →{' '}
+        <span className={`badge ${scoreClass(change.after)}`}>{change.after}</span>{' '}
+        <span className="muted small">
+          ({delta > 0 ? `+${delta}` : delta === 0 ? 'no change' : delta}, {change.verdict})
+        </span>
+      </p>
+      {change.improved.length > 0 && (
+        <ul className="plain-list small">
+          {change.improved.map((x) => (
+            <li key={x}>▲ {x}</li>
+          ))}
+        </ul>
+      )}
+      {change.worse.length > 0 && (
+        <ul className="plain-list small">
+          {change.worse.map((x) => (
+            <li key={x}>▼ {x}</li>
+          ))}
+        </ul>
+      )}
+      <p className="muted small">Same scorer and job, run on the tailored text. It only counts what the text shows.</p>
+    </div>
+  )
+}
+
 export function TailorReportView({ report }: { report: TailorReport }) {
   const before = report.coverage_before
   const after = report.coverage_after
@@ -141,6 +173,7 @@ export function TailorReportView({ report }: { report: TailorReport }) {
           {before.percent}% → {after.percent}% of all job keywords
         </p>
       </div>
+      {report.fit_after && <FitChangeView change={report.fit_after} />}
       <div className="report-block">
         <h4>Covered</h4>
         <Chips items={after.covered} kind="good" />

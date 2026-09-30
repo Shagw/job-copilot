@@ -16,6 +16,7 @@ from app.agents.base import AgentError, extract_tagged, has_tool_markup
 from app.agents.cover_critic import critique, lint_letter
 from app.agents.fit_scorer import FitResult
 from app.agents.job_parser import ParsedJob
+from app.agents.progress import say
 from app.agents.shorten import char_budget, shorten
 from app.llm.groq_client import LLMClient
 from app.rag.store import ResumeIndex
@@ -144,6 +145,7 @@ def write_cover_letter(
             user = (f"{base}\n\nYour previous draft:\n<letter>\n{letter}\n</letter>\n\n"
                     f"A hiring manager reviewed it. Revise the letter to fix ALL of this feedback:\n{feedback}")
 
+        say("Writing the cover letter" if letter is None else f"Round {rnd}: revising with the critic's feedback")
         draft, writer_steps = _write(llm, user)
         if not draft:
             if letter is None:
@@ -153,6 +155,7 @@ def write_cover_letter(
         letter = draft
 
         lint = lint_letter(letter, source, job_text, keywords)
+        say("The critic is reviewing the letter")
         review = critique(llm, letter, job, fitted.text, lint, jev=jev)
         approved = review.approved and not lint.hard
         issues = lint.hard + review.issues

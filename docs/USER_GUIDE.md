@@ -69,6 +69,7 @@ the right that stays in view while you scroll:
 | **Check these lines before using the resume** | Lines the checks couldn't match to your resume (a new number or skill). Fix or remove them. |
 | **Keywords added** | Job keywords the tailored version now shows, and the section they went into. |
 | **These results from your resume are missing** | Numbers from your resume (40%, 1M+ users, $2M) that the tailored version lost. Put them back or ask for it in a re-tailor. |
+| **Fit on this version** | Your fit score re-checked on the tailored text (for example 61 → 68), and which requirements it now shows better. It only counts what the text proves. |
 | **Recruiter check** | What a recruiter notices in 15 seconds: top skills near the top, measurable impact, length, no keyword stuffing, and (when enabled) whether you look relevant fast, the summary is specific, the current role is clear, bullets are concise and formatting is clean. Each ⚠️ says what to fix. |
 
 **Edit it yourself.** Click **Edit text**, change anything, then **Save & preview**. Keep headings in CAPITALS and
@@ -85,6 +86,15 @@ start bullets with "- " for the best PDF layout.
 Each round works on the **current** text (including your unsaved edits), changes only what you asked, and
 re-runs all the checks. Things you told it in earlier rounds stay true. The heading shows how many times you've
 revised it.
+
+**Go back to any version.** Open **Versions** (below Ask for changes). Every version is kept: the first
+tailoring, each re-tailor (with what you asked for), your saved edits and restores, each with its keyword
+coverage and fit. **Compare with current** shows the lines that were added or removed. **Restore vN** makes that
+version current again (its checks come back too); it's added as a new version, so you never lose anything.
+Save or discard unsaved edits first.
+
+While the AI works you see each step as it happens (for example "Writing the tailored draft", "Fix round 1:
+fixing 2 problems", "Re-scoring your fit"). If you close the page mid-run, the result is still saved.
 
 When you're happy: **Download PDF** / **Download DOCX**, or add **Notes for the cover letter (optional)** (why
 this company, tone, anything personal) and click **Approve & write cover letter**.

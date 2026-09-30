@@ -164,6 +164,18 @@ class CoverLetterRequest(BaseModel):
     instructions: str | None = Field(None, max_length=1000)  # tone, why this company, etc.
 
 
+class ResumeVersionOut(BaseModel):
+    id: int
+    number: int  # 1 = oldest
+    source: str  # tailor | revise | edit | restore | earlier
+    note: str | None
+    text: str
+    created_at: UtcDatetime
+    coverage: int | None  # supported-keyword coverage of this version, if it was checked
+    fit_score: int | None  # fit re-scored on this version, if available
+    current: bool  # same text as the session's tailored resume now
+
+
 class SessionOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

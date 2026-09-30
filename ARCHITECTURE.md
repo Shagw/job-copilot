@@ -130,6 +130,25 @@ doesn't treat its state as hostile, so it never decides alone: code thresholds a
   so the checks judge only what the revision adds.
 - The report (coverage before/after, remaining issues, changes, keywords added and where, lost metrics, recruiter
   checks, revision, notes) is recomputed on the final text.
+- **Fit re-scored on the tailored text** (`fit_scorer.rescore_fit`): if the session has a fit, the same scorer
+  (Jev, else one Groq call) runs on the tailored resume through an in-memory `TextIndex` (nothing written to
+  ChromaDB). `report.fit_after` = before/after score and which requirements moved (e.g. "AWS: missing →
+  strong"). Best-effort: a failed re-score leaves `fit_after` empty and never loses the resume. The session's
+  original `fit_result` is kept as it was.
+
+**Live progress (SSE).** Agents call `progress.say("Fix round 1: fixing 2 problems")`, a no-op unless a listener
+is set (a `ContextVar`), so agents stay plain functions. `/fit`, `/tailor` and `/cover-letter` return JSON by
+default; with `Accept: text/event-stream` (`services/streaming.py`) the run happens in a worker thread and the
+response streams `event: progress` messages, then one `done` (the saved session) or `error` ({status, detail,
+retry_after}, from the same `errors.describe` the JSON handlers use). Auth, ownership and "no resume" checks run
+before the stream starts, so they stay normal HTTP errors. Keep-alive comments every 15 s; if the browser
+disconnects, the run still finishes and is saved.
+
+**Resume versions** (`services/versions.py`). Every tailored text is stored as a `resume_versions` row with its
+report: `tailor`, `revise` (with the request as the note), `edit` (Save & preview, unsaved edits sent to a
+revision or to the cover letter), `restore`. Saving identical text isn't a new version. Restoring copies the old
+text and its report back and records a new `restore` version, so nothing is lost. Sessions from before versions
+existed get their text as version 1 (`earlier`) on first access.
 
 **Writer ⇄ Critic.** Each round: one Writer call → code lint (hard: invented numbers, placeholders, length;
 soft: clichés, unbacked skills) → Critic. The Jev Critic's quality `score` maps to 2-10 and its yes/no checks
@@ -210,6 +229,8 @@ resumes       id, user_id, filename, raw_text, uploaded_at
 job_sessions  id, user_id, job_url, job_text, parsed_job (JSON), fit_result (JSON),
               tailored_resume, tailor_report (JSON), cover_letter, cover_letter_report (JSON),
               agent_trace (JSON), current_step, status, created_at, archived_at
+resume_versions id, session_id, text, source (tailor | revise | edit | restore | earlier), note,
+              report (JSON, tailor_report for that text), created_at
 ```
 
 - Every query is scoped by `user_id`.
@@ -235,7 +256,7 @@ job_sessions  id, user_id, job_url, job_text, parsed_job (JSON), fit_result (JSO
 |------|-----------|
 | Auth | `POST /auth/signup`, `/auth/verify-otp`, `/auth/resend-otp`, `/auth/login`, `/auth/logout`, `/auth/forgot-password`, `/auth/reset-password`, `GET /auth/me` |
 | Resume | `POST /resume`, `GET /resume` |
-| Sessions | `POST /sessions` (text or URL → parse), `POST /sessions/{id}/fit`, `/tailor` (`instructions`; plus `current_resume` to revise the current version), `/cover-letter`, `PATCH /sessions/{id}` (edits + status), `GET /sessions` (history, last 3 days), `GET /sessions/{id}`, `GET /sessions/{id}/export/{resume\|cover-letter}?format=docx\|pdf[&inline=true]` |
+| Sessions | `POST /sessions` (text or URL → parse), `POST /sessions/{id}/fit`, `/tailor` (`instructions`; plus `current_resume` to revise the current version), `/cover-letter`, `PATCH /sessions/{id}` (edits + status), `GET /sessions` (history, last 3 days), `GET /sessions/{id}`, `GET /sessions/{id}/export/{resume\|cover-letter}?format=docx\|pdf[&inline=true]`, `GET /sessions/{id}/resume-versions` (newest first, max 30), `POST /sessions/{id}/resume-versions/{vid}/restore`. The three agent endpoints stream progress with `Accept: text/event-stream` |
 | Ops | `GET /admin/llm-status` (only emails in `ADMIN_EMAILS`) |
 
 ## 8. Folder structure
@@ -247,17 +268,18 @@ job-copilot/
 ├── .github/       workflows/ci.yml (offline tests on every push/PR), issue + PR templates
 ├── backend/
 │   ├── app/
-│   │   ├── main.py  config.py  database.py  models.py  schemas.py
+│   │   ├── main.py  config.py  database.py  models.py  schemas.py  errors.py (error → HTTP mapping)
 │   │   ├── auth/        security.py (bcrypt, JWT), otp.py, deps.py, rate_limit.py
 │   │   ├── routers/     auth.py, resume.py, sessions.py, admin.py
 │   │   ├── agents/      base.py (ReAct loop), tools.py, ats.py (coverage + claim checks), job_parser.py,
 │   │   │                fit_scorer.py, resume_tailor.py, recruiter.py (recruiter screen), cover_writer.py,
-│   │   │                cover_critic.py
+│   │   │                cover_critic.py, progress.py (live progress messages)
 │   │   ├── llm/         key_pool.py, groq_client.py, jev_client.py (TypeSafe Jev, optional)
 │   │   ├── rag/         embeddings.py, store.py (chunking + per-user ChromaDB index)
 │   │   ├── agents/…     + shorten.py (fit long inputs to the token budget)
 │   │   ├── server.py    production site: built frontend at /, API at /api, security headers
-│   │   └── services/    email.py, url_fetcher.py, file_parser.py, archive.py, docx_export.py, pdf_export.py
+│   │   └── services/    email.py, url_fetcher.py, file_parser.py, archive.py, docx_export.py, pdf_export.py,
+│   │                    streaming.py (SSE runs), versions.py (resume history)
 │   ├── tests/
 │   ├── requirements.txt   .env.example
 └── frontend/
@@ -265,7 +287,7 @@ job-copilot/
     └── src/
         ├── api/              client.ts (typed fetch, ApiError with retryAfter), types.ts
         ├── context/          AuthProvider (asks /auth/me on load; the cookie itself is unreadable by JS)
-        ├── components/       Layout + route guards, ui (ErrorAlert countdown, Working timer), Reports, AgentTrace
+        ├── components/       Layout + route guards, ui (ErrorAlert countdown, Working timer + live steps), Reports, AgentTrace, Versions (list, compare, restore)
         ├── pages/            Login/Signup/Verify/Forgot/Reset, History, New job, Resume, Session wizard, AI status
         ├── components/…      + PdfPreview (browser PDF viewer in an iframe)
         └── test/             Vitest + Testing Library (fetch mocked)
@@ -285,7 +307,12 @@ job-copilot/
 - **Ask for changes** on the Resume tab sends the current text (including unsaved edits) plus the request to
   `/tailor` as `current_resume`; the result replaces the text, the preview reloads and the box clears for the
   next request. The heading shows the revision count. It can be repeated any number of times.
-- Long agent runs show an elapsed-seconds timer. A 503 "AI is busy" shows a live retry countdown.
+- Agent runs stream progress (`postStream` in `api/client.ts`, fetch + ReadableStream, since EventSource can't
+  POST): the current step is announced in a `role=status` live region and earlier steps are listed as done, next
+  to an elapsed-seconds timer. A 503 "AI is busy" shows a live retry countdown.
+- **Versions** (under Ask for changes): every version with its source, request, coverage and fit; "Compare with
+  current" shows a line diff (`lib/diff.ts`, LCS); "Restore vN" is disabled while there are unsaved edits.
+- The report sidebar shows **Fit on this version** (before → after, requirements that moved).
 - A job link the backend can't fetch (LinkedIn, JS-only pages) switches the form to paste mode.
 - Visuals: a stepper with numbered circles, card shadows, and dark mode via `prefers-color-scheme`. No inline
   styles (the coverage meter is a native `<progress>`), so the strict CSP holds.
@@ -316,11 +343,11 @@ permissions policy and HSTS in production. Startup refuses a `JWT_SECRET` under 
 
 ## 9c. Testing
 
-- **Backend (262):** offline, with a scripted `FakeLLM`, a `FakeJev` and a fake embedder. Covers the auth flows,
+- **Backend (279):** offline, with a scripted `FakeLLM`, a `FakeJev` and a fake embedder. Covers the auth flows,
   OTP limits, RAG isolation between users, KeyPool failover, agent loops (text tool calls, retries, step limits),
   scoring and grounding, Jev client contract and fallbacks, ATS/claim checks, notes as facts, repeated
   re-tailoring, shortening, URL fetcher SSRF, archive and exports.
-- **Frontend (30):** component and flow tests with mocked fetch.
+- **Frontend (39):** component and flow tests with mocked fetch.
 - **E2E (4):** real Chromium against the production build and real Groq. Covers the full journey, cookie and
   security headers, password reset and mobile layout. Fails on any JS error, CSP violation or unexpected failed
   request. It uses full Chromium because the default headless shell has no PDF viewer.

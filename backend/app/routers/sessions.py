@@ -9,12 +9,12 @@ from collections.abc import Callable
 from datetime import timedelta
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.agents.cover_writer import write_cover_letter
-from app.agents.fit_scorer import FitResult, score_fit
+from app.agents.fit_scorer import FitResult, rescore_fit, score_fit
 from app.agents.job_parser import ParsedJob, parse_job
 from app.agents.resume_tailor import tailor_resume
 from app.auth.deps import get_current_user
@@ -32,12 +32,15 @@ from app.schemas import (
     SessionCreate,
     SessionOut,
     SessionSummary,
+    ResumeVersionOut,
     SessionUpdate,
     TailorRequest,
 )
+from app.services import versions
 from app.services.archive import archive_expired, history_cutoff
 from app.services.docx_export import text_to_docx
 from app.services.pdf_export import letter_to_pdf, resume_to_pdf
+from app.services.streaming import stream_run, wants_stream
 from app.services.url_fetcher import FetchError, fetch_job_text
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
@@ -136,9 +139,17 @@ def create_session(
     return session
 
 
+def _respond(request: Request, work: Callable[[], JobSession]):
+    """JSON by default; with `Accept: text/event-stream`, live progress events and then the session."""
+    if not wants_stream(request):
+        return work()
+    return stream_run(lambda: SessionOut.model_validate(work()).model_dump(mode="json"))
+
+
 @router.post("/{session_id}/fit", response_model=SessionOut)
 def run_fit(
     session_id: int,
+    request: Request,
     body: FitRequest | None = None,
     user: User = Depends(limit_agent_runs),
     db: Session = Depends(get_db),
@@ -149,23 +160,25 @@ def run_fit(
     session = get_visible_session(db, user, session_id)
     resume = _require_resume(db, user)
 
-    if body and body.parsed_job:  # the user reviewed and edited the parsed job
-        session.parsed_job = body.parsed_job.model_dump()
+    def work() -> JobSession:
+        if body and body.parsed_job:  # the user reviewed and edited the parsed job
+            session.parsed_job = body.parsed_job.model_dump()
+        job = ParsedJob.model_validate(session.parsed_job or {})
+        result, run = score_fit(llm, job, index, user.id, resume.raw_text, jev)
+        session.fit_result = result.model_dump()
+        # Reassign (not mutate) so SQLAlchemy notices the JSON change.
+        session.agent_trace = {**(session.agent_trace or {}), "fit": run.trace}
+        advance(session, "scored")
+        db.commit()
+        return session
 
-    job = ParsedJob.model_validate(session.parsed_job or {})
-    result, run = score_fit(llm, job, index, user.id, resume.raw_text, jev)
-
-    session.fit_result = result.model_dump()
-    # Reassign (not mutate) so SQLAlchemy notices the JSON change.
-    session.agent_trace = {**(session.agent_trace or {}), "fit": run.trace}
-    advance(session, "scored")
-    db.commit()
-    return session
+    return _respond(request, work)
 
 
 @router.post("/{session_id}/tailor", response_model=SessionOut)
 def run_tailor(
     session_id: int,
+    request: Request,
     body: TailorRequest | None = None,
     user: User = Depends(limit_agent_runs),
     db: Session = Depends(get_db),
@@ -175,29 +188,45 @@ def run_tailor(
 ):
     session = get_visible_session(db, user, session_id)
     resume = _require_resume(db, user)
-    job = ParsedJob.model_validate(session.parsed_job or {})
-    fit = FitResult.model_validate(session.fit_result) if session.fit_result else None
 
-    current = body.current_resume.strip() if body and body.current_resume else None
-    previous = session.tailor_report or {}
-    text, report, run = tailor_resume(
-        llm, job, resume.raw_text, index, user.id, fit, body.instructions if body else None, jev=jev,
-        current=current,
-        # Notes from earlier rounds stay true facts when revising; a fresh tailoring starts over.
-        prior_notes=previous.get("notes", []) if current else None,
-        revision=previous.get("revision", 0) + 1 if current else 0,
-    )
-    session.tailored_resume = text
-    session.tailor_report = report.model_dump()
-    session.agent_trace = {**(session.agent_trace or {}), "tailor": run.trace}
-    advance(session, "tailored")
-    db.commit()
-    return session
+    def work() -> JobSession:
+        job = ParsedJob.model_validate(session.parsed_job or {})
+        fit = FitResult.model_validate(session.fit_result) if session.fit_result else None
+        current = body.current_resume.strip() if body and body.current_resume else None
+        instructions = body.instructions if body else None
+        previous = session.tailor_report or {}
+        versions.ensure_baseline(db, session)
+        if current and current != session.tailored_resume:
+            session.tailored_resume = current  # unsaved hand edits become a version before they're revised
+            versions.record(db, session, "edit")
+        text, report, run = tailor_resume(
+            llm, job, resume.raw_text, index, user.id, fit, instructions, jev=jev,
+            current=current,
+            # Notes from earlier rounds stay true facts when revising; a fresh tailoring starts over.
+            prior_notes=previous.get("notes", []) if current else None,
+            revision=previous.get("revision", 0) + 1 if current else 0,
+        )
+        trace = run.trace
+        if fit is not None:  # how the tailored version scores against the same job
+            rescored = rescore_fit(llm, job, text, index.embedder, fit, jev)
+            if rescored:
+                report.fit_after, step = rescored
+                trace = trace + [{**step, "step": len(trace) + 1}]
+        session.tailored_resume = text
+        session.tailor_report = report.model_dump()
+        session.agent_trace = {**(session.agent_trace or {}), "tailor": trace}
+        versions.record(db, session, "revise" if current else "tailor", instructions)
+        advance(session, "tailored")
+        db.commit()
+        return session
+
+    return _respond(request, work)
 
 
 @router.post("/{session_id}/cover-letter", response_model=SessionOut)
 def run_cover_letter(
     session_id: int,
+    request: Request,
     body: CoverLetterRequest | None = None,
     user: User = Depends(limit_agent_runs),
     db: Session = Depends(get_db),
@@ -207,19 +236,51 @@ def run_cover_letter(
 ):
     session = get_visible_session(db, user, session_id)
     resume = _require_resume(db, user)
-    if body and body.tailored_resume:  # the user reviewed and edited the tailored resume
-        session.tailored_resume = body.tailored_resume.strip()
-    job = ParsedJob.model_validate(session.parsed_job or {})
-    fit = FitResult.model_validate(session.fit_result) if session.fit_result else None
 
-    letter, report, trace = write_cover_letter(
-        llm, job, session.job_text, session.tailored_resume or resume.raw_text, resume.raw_text,
-        index, user.id, fit, body.instructions if body else None, jev=jev,
-    )
-    session.cover_letter = letter
-    session.cover_letter_report = report.model_dump()
-    session.agent_trace = {**(session.agent_trace or {}), "cover_letter": trace}
-    advance(session, "done")
+    def work() -> JobSession:
+        if body and body.tailored_resume:  # the user reviewed and edited the tailored resume
+            versions.ensure_baseline(db, session)
+            session.tailored_resume = body.tailored_resume.strip()
+            versions.record(db, session, "edit")
+        job = ParsedJob.model_validate(session.parsed_job or {})
+        fit = FitResult.model_validate(session.fit_result) if session.fit_result else None
+        letter, report, trace = write_cover_letter(
+            llm, job, session.job_text, session.tailored_resume or resume.raw_text, resume.raw_text,
+            index, user.id, fit, body.instructions if body else None, jev=jev,
+        )
+        session.cover_letter = letter
+        session.cover_letter_report = report.model_dump()
+        session.agent_trace = {**(session.agent_trace or {}), "cover_letter": trace}
+        advance(session, "done")
+        db.commit()
+        return session
+
+    return _respond(request, work)
+
+
+@router.get("/{session_id}/resume-versions", response_model=list[ResumeVersionOut])
+def list_resume_versions(session_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Newest first (at most 30), with each version's full text so the UI can compare them."""
+    session = get_visible_session(db, user, session_id)
+    versions.ensure_baseline(db, session)
+    db.commit()
+    return versions.list_versions(db, session)
+
+
+@router.post("/{session_id}/resume-versions/{version_id}/restore", response_model=SessionOut)
+def restore_resume_version(
+    session_id: int, version_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)
+):
+    """Make an earlier version current again (recorded as a new version, so nothing is lost)."""
+    session = get_visible_session(db, user, session_id)
+    versions.ensure_baseline(db, session)
+    version = versions.get_version(db, session, version_id)
+    if version is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Version not found")
+    session.tailored_resume = version.text
+    if version.report is not None:
+        session.tailor_report = version.report  # the checks that belong to that text
+    versions.record(db, session, "restore", f"Restored version {versions.number_of(db, version)}")
     db.commit()
     return session
 
@@ -239,7 +300,9 @@ def update_session(
     if "parsed_job" in changes:
         session.parsed_job = body.parsed_job.model_dump()
     if "tailored_resume" in changes:
+        versions.ensure_baseline(db, session)
         session.tailored_resume = body.tailored_resume.strip()
+        versions.record(db, session, "edit")
     if "cover_letter" in changes:
         session.cover_letter = body.cover_letter.strip()
     if "status" in changes:

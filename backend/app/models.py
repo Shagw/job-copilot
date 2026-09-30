@@ -75,3 +75,18 @@ class JobSession(Base):
     status: Mapped[str] = mapped_column(String(20), default="draft")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ResumeVersion(Base):
+    """Every tailored-resume text a session has had (tailor, re-tailor, hand edit, restore). Never deleted,
+    so the user can compare versions and go back to any of them."""
+
+    __tablename__ = "resume_versions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    session_id: Mapped[int] = mapped_column(ForeignKey("job_sessions.id"), index=True)
+    text: Mapped[str] = mapped_column(Text)
+    source: Mapped[str] = mapped_column(String(20))  # tailor | revise | edit | restore | earlier
+    note: Mapped[str | None] = mapped_column(String(1000), nullable=True)  # the user's request, if any
+    report: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # tailor_report for this text
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

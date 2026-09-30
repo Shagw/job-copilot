@@ -22,10 +22,11 @@ from pydantic import BaseModel, field_validator
 from app.agents.ats import has_keyword, numbers_in
 from app.agents.base import AgentError, AgentResult, parse_structured
 from app.agents.job_parser import ParsedJob
+from app.agents.progress import listening, say
 from app.agents.tools import grounded_evidence
 from app.llm.groq_client import LLMClient
 from app.llm.jev_client import JevUnavailable, choice, noul
-from app.rag.store import ResumeIndex
+from app.rag.store import ResumeIndex, TextIndex
 
 log = logging.getLogger("app.agents.fit")
 _YEARS_REQ = re.compile(r"(\d+)\s*\+?\s*(?:years?|yrs?)\b", re.I)
@@ -411,21 +412,71 @@ def score_fit(
     if not reqs:
         raise AgentError("No requirements found in this job to score against.", status_code=422)
 
+    say(f"Finding evidence in your resume for {len(reqs)} requirements")
     lines, per_req = _candidates(job, reqs, index, user_id, resume_text)
     trace = [{"step": 1, "type": "tool", "tool": "search_my_experience", "model": "code",
               "result": f"{len(lines)} resume lines retrieved for {len(reqs)} requirements"}]
     models = []
     try:
+        if jev:
+            say(f"Jev is judging {len(lines)} resume lines against each requirement")
         llm_fit, step = _judge_with_jev(jev, reqs, lines, per_req, resume_text) if jev else (None, None)
     except JevUnavailable as e:
         log.info("Fit: Jev unavailable (%s), using Groq", e)
         llm_fit, step = None, None
     if llm_fit is None:
+        say("The AI is judging each requirement")
         llm_fit, step = _judge_with_llm(llm, job, reqs, lines, per_req)
     step.update({"step": 2, "type": "tool"})
     trace.append(step)
     models.append(step.get("model") or "")
+    say("Verifying the evidence and computing the score")
     result = build_result(job, llm_fit, resume_text)
     trace.append({"step": 3, "type": "final", "model": "code",
                   "thought": f"Code verified the evidence and computed the score ({result.score})."})
     return result, AgentResult(content="", trace=trace, steps=3, models=models)
+
+
+class FitChange(BaseModel):
+    """Fit on a tailored version vs. the original resume. Same scorer, same job; only the text differs."""
+    before: int
+    after: int
+    verdict: str
+    improved: list[str] = []  # "Kubernetes: missing → partial"
+    worse: list[str] = []
+
+
+_RANK = {"missing": 0, "partial": 1, "strong": 2}
+
+
+def compare_fit(before: FitResult, after: FitResult) -> FitChange:
+    old = {r.requirement: r.match for r in before.requirements}
+    improved, worse = [], []
+    for r in after.requirements:
+        was = old.get(r.requirement)
+        if was is None or was == r.match:
+            continue
+        (improved if _RANK[r.match] > _RANK[was] else worse).append(f"{r.requirement[:80]}: {was} → {r.match}")
+    return FitChange(before=before.score, after=after.score, verdict=after.verdict,
+                     improved=improved[:10], worse=worse[:10])
+
+
+def rescore_fit(
+    llm: LLMClient, job: ParsedJob, text: str, embedder, before: FitResult, jev=None,
+) -> tuple[FitChange, dict] | None:
+    """Score the tailored text the same way the original was scored (Jev, else one Groq call).
+
+    Best-effort: a failure here must never lose the tailored resume, so it returns None instead.
+    """
+    say("Re-scoring your fit on the tailored resume")
+    try:
+        with listening(lambda _message: None):  # one progress line for the re-score, not its inner steps
+            result, run = score_fit(llm, job, TextIndex(text, embedder), 0, text, jev)
+    except Exception as e:  # noqa: BLE001
+        log.warning("Fit re-score skipped (%s: %s)", type(e).__name__, e)
+        return None
+    change = compare_fit(before, result)
+    judge = next((t for t in run.trace if t.get("step") == 2), {})
+    step = {"type": "tool", "tool": "re-score fit on the tailored resume", "model": judge.get("model") or "code",
+            "tokens": judge.get("tokens"), "result": f"fit {change.before} → {change.after}"}
+    return change, step

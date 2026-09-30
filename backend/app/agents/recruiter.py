@@ -13,6 +13,7 @@ from pydantic import BaseModel
 
 from app.agents.ats import _norm, _pattern, has_keyword, metrics_in
 from app.agents.job_parser import ParsedJob
+from app.agents.progress import say
 from app.llm.jev_client import JevUnavailable, noul
 
 log = logging.getLogger("app.agents.recruiter")
@@ -105,6 +106,7 @@ def jev_checks(jev, resume: str, job: ParsedJob, trace: list[dict]) -> list[Recr
     top = "\n".join([ln for ln in resume.splitlines() if ln.strip()][:15])
     job_text = f"{job.title or ''} {('at ' + job.company) if job.company else ''}\nMust have: " + "; ".join(job.must_have)
     questions = {cid: noul({"question": q}) for cid, (q, _, _, _) in JEV_CHECKS.items()}
+    say("Jev: 15-second recruiter check")
     try:
         res = jev.ask({"job": job_text[:4000], "top": top, "resume": resume[:20_000]}, questions)
     except JevUnavailable as e:

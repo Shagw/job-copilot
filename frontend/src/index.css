@@ -596,7 +596,18 @@ details summary {
   border-left: 1px solid var(--border);
 }
 
-.segmented button[aria-pressed=true] {
+.segmented button {
+  transition: none; /* a toggle should switch instantly */
+  box-shadow: none;
+}
+
+.segmented button[aria-pressed=false]:not(:disabled):hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.segmented button[aria-pressed=true],
+.segmented button[aria-pressed=true]:hover {
   background: var(--primary);
   color: #fff;
 }
@@ -836,9 +847,6 @@ select:focus {
   .workspace-side {
     position: sticky;
     top: 5rem;
-    max-height: calc(100vh - 6rem);
-    overflow-y: auto;
-    padding-right: 0.25rem;
   }
 }
 
@@ -996,4 +1004,115 @@ select:focus {
   .stepper button.active .step-num {
     color: #0f141b;
   }
+}
+
+/* ---------- live agent steps ---------- */
+.working-box {
+  margin-top: 0.75rem;
+}
+.working-box .working {
+  margin-top: 0;
+}
+.live-steps {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0 0 0 0.35rem;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+.live-steps li {
+  padding: 0.1rem 0;
+}
+.live-steps li span {
+  color: var(--good);
+  margin-right: 0.25rem;
+}
+
+/* ---------- resume versions + compare ---------- */
+.versions {
+  margin-top: 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.6rem 1rem;
+  background: var(--card);
+}
+.versions > summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.version-list {
+  list-style: none;
+  margin: 0.75rem 0 0;
+  padding: 0;
+  display: grid;
+  gap: 0.5rem;
+}
+.version {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.6rem 0.8rem;
+}
+.version.current {
+  border-color: color-mix(in srgb, var(--primary) 45%, var(--border));
+  background: var(--surface-2);
+}
+.version-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: baseline;
+}
+.version p {
+  margin: 0.25rem 0;
+}
+.version .actions {
+  margin-top: 0.35rem;
+}
+.version-note {
+  font-style: italic;
+}
+.small-button {
+  padding: 0.3rem 0.7rem;
+  font-size: 0.85rem;
+}
+.diff {
+  margin: 0.75rem 0 0;
+}
+.diff figcaption {
+  font-weight: 600;
+  margin-bottom: 0.35rem;
+}
+.diff pre {
+  max-height: 28rem;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.6rem 0.8rem;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  background: var(--surface-2);
+}
+.diff ins,
+.diff del,
+.diff-same {
+  display: block;
+  text-decoration: none;
+}
+.diff ins {
+  background: var(--good-bg);
+  color: var(--good);
+}
+.diff del {
+  background: var(--bad-bg);
+  color: var(--bad);
+}
+.diff-same {
+  color: var(--muted);
+}
+.diff-added-count {
+  color: var(--good);
+}
+.diff-removed-count {
+  color: var(--bad);
 }

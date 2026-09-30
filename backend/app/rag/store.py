@@ -90,6 +90,30 @@ class ResumeIndex:
         return [Hit(text=d, score=round(1 - dist, 4)) for d, dist in zip(docs, dists)]
 
 
+class TextIndex:
+    """In-memory index over one text (e.g. a tailored resume), with the same `search` as ResumeIndex.
+
+    Used to re-score fit on a version that isn't the stored resume; nothing is written to ChromaDB.
+    """
+
+    def __init__(self, text: str, embedder: Embedder):
+        self.embedder = embedder
+        self.chunks = chunk_text(text)
+        self.vectors = embedder.embed(self.chunks) if self.chunks else []
+
+    def search(self, user_id: int, query: str, k: int = 4) -> list[Hit]:  # noqa: ARG002 (one user's text)
+        if not query.strip() or not self.chunks:
+            return []
+        q = self.embedder.embed([query])[0]
+        qn = sum(x * x for x in q) ** 0.5 or 1.0
+
+        def cosine(v: list[float]) -> float:
+            return sum(a * b for a, b in zip(q, v)) / (qn * (sum(x * x for x in v) ** 0.5 or 1.0))
+
+        scored = sorted(((cosine(v), c) for v, c in zip(self.vectors, self.chunks)), reverse=True)[:k]
+        return [Hit(text=c, score=round(s, 4)) for s, c in scored]
+
+
 @lru_cache
 def get_resume_index() -> ResumeIndex:
     s = get_settings()

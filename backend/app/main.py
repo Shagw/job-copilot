@@ -4,7 +4,6 @@ Development: uvicorn app.main:app --reload   (Vite dev server proxies /api/* her
 Production:  uvicorn app.server:site          (serves the built frontend + this app at /api)
 """
 import logging
-import math
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -15,6 +14,7 @@ from app import models  # noqa: F401  (registers tables on Base.metadata)
 from app.agents.base import AgentError
 from app.config import get_settings
 from app.database import Base, SessionLocal, engine
+from app.errors import describe
 from app.llm.groq_client import LLMNotConfigured, LLMRequestTooLarge
 from app.llm.key_pool import AllSlotsBusy
 from app.routers import admin, auth, resume, sessions
@@ -52,33 +52,13 @@ app.include_router(sessions.router)
 app.include_router(admin.router)
 
 
-@app.exception_handler(AgentError)
-async def _agent_error(_: Request, exc: AgentError):
-    return JSONResponse(status_code=exc.status_code, content={"detail": str(exc)})
+def _handle(_: Request, exc: Exception):
+    status, body, headers = describe(exc)
+    return JSONResponse(status_code=status, content=body, headers=headers or None)
 
 
-@app.exception_handler(AllSlotsBusy)
-async def _llm_busy(_: Request, exc: AllSlotsBusy):
-    if exc.retry_after is None:
-        return JSONResponse(status_code=503, content={"detail": "AI service is unavailable. Please contact the admin."})
-    seconds = max(1, math.ceil(exc.retry_after))
-    return JSONResponse(
-        status_code=503,
-        content={"detail": f"AI is busy, try again in {seconds} seconds", "retry_after": seconds},
-        headers={"Retry-After": str(seconds)},
-    )
-
-
-@app.exception_handler(LLMNotConfigured)
-async def _llm_not_configured(_: Request, __: LLMNotConfigured):
-    return JSONResponse(status_code=503, content={"detail": "AI service is not configured."})
-
-
-@app.exception_handler(LLMRequestTooLarge)
-async def _llm_too_large(_: Request, __: LLMRequestTooLarge):
-    return JSONResponse(status_code=413, content={
-        "detail": "This job posting or resume is too long for the AI to process. Please shorten it and try again."
-    })
+for _exc in (AgentError, AllSlotsBusy, LLMNotConfigured, LLMRequestTooLarge):
+    app.add_exception_handler(_exc, _handle)
 
 
 @app.get("/health")

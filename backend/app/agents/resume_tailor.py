@@ -24,8 +24,9 @@ import re
 from app.agents.ats import (ClaimIssue, ClaimReport, Coverage, dropped_metrics, has_keyword, keyword_coverage,
                             keyword_places, verify_claims)
 from app.agents.base import AgentError, AgentResult, extract_tagged, has_tool_markup
-from app.agents.fit_scorer import FitResult
+from app.agents.fit_scorer import FitChange, FitResult
 from app.agents.job_parser import ParsedJob
+from app.agents.progress import say
 from app.agents.recruiter import RecruiterCheck, recruiter_check
 from app.agents.shorten import char_budget, shorten
 from app.llm.groq_client import LLMClient, LLMRequestTooLarge
@@ -56,6 +57,7 @@ class TailorReport(BaseModel):
     revision: int = 0  # 0 = first tailoring; 1, 2, ... = re-tailored with the candidate's change requests
     notes: list[str] = []  # every note given so far; they stay trusted facts in later revisions
     keywords_added: list[KeywordPlace] = []  # covered now but not before, and where they are in the resume
+    fit_after: FitChange | None = None  # fit re-scored on this version (None: no earlier fit, or it failed)
     metrics_dropped: list[str] = []  # quantified results from the resume that the tailored version lost
     recruiter: list[RecruiterCheck] = []  # 15-second recruiter screen (code checks, + Jev judgments if enabled)
 
@@ -197,6 +199,8 @@ def _draft(llm: LLMClient, messages: list[dict], trace: list[dict], label: str) 
     """One writing call, plus up to 2 corrective retries if the answer isn't a resume."""
     content = ""
     for attempt in range(DRAFT_ATTEMPTS):
+        if attempt:
+            say("The answer wasn't a resume; asking again")
         r = llm.chat(messages, temperature=0.3, max_tokens=4000)
         content = r.message.content or ""
         trace.append({"step": len(trace) + 1, "type": "final" if attempt else "tool", "tool": label,
@@ -231,6 +235,7 @@ def _jev_unsupported(jev, draft: str, original: str, trace: list[dict], state: d
     if not changed:
         return []
     fields = " or ".join(f"`{k}`" for k in state)
+    say(f"Jev: checking {len(changed)} changed line{'s' if len(changed) != 1 else ''} against your facts")
     questions = {f"l{i}": noul({"line": ln, "question": f"Is every factual claim in `line` supported by {fields}? "
                                 "Anything the candidate states in their notes is true. Rewording is fine; new facts, "
                                 "numbers, skills or responsibilities are not."})
@@ -258,6 +263,7 @@ def _check(draft: str, original: str, keywords: list[str], jev, trace: list[dict
            *, job: ParsedJob | None = None, reference: str | None = None) -> _Checked:
     """All checks on one draft. `reference` is what quantified results must survive from (the version being
     revised, else the original resume)."""
+    say("Checking keywords, claims and quantified results")
     coverage = keyword_coverage(draft, keywords, original)
     claims = verify_claims(draft, original, keywords)
     issues = claims.issues + _jev_unsupported(jev, draft, original, trace, state)
@@ -358,6 +364,7 @@ def tailor_resume(
     base = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": user}]
     trace: list[dict] = []
 
+    say("Revising your resume with your requests" if current else "Writing the tailored draft")
     draft, content = _draft(llm, base, trace, label)
     if not draft:
         raise AgentError("The AI could not produce a tailored resume. Please try again.")
@@ -365,9 +372,10 @@ def tailor_resume(
     checked = _check(draft, source, keywords, jev, trace, state, job=job, reference=reference)
     problems = _problems(checked)
 
-    for _ in range(MAX_FIX_ROUNDS):
+    for rnd in range(1, MAX_FIX_ROUNDS + 1):
         if not problems:
             break
+        say(f"Fix round {rnd}: fixing {len(problems)} problem{'s' if len(problems) != 1 else ''}")
         fix_msgs = base + [
             {"role": "assistant", "content": content},
             {"role": "user", "content": "Automated checks found these problems in your draft. Fix ALL of them, change "
@@ -383,6 +391,7 @@ def tailor_resume(
             break
         checked2 = _check(fixed, source, keywords, jev, trace, state, job=job, reference=reference)
         if _badness(checked2) >= _badness(checked):
+            say("The fix wasn't better; keeping the previous version")
             break  # not better: keep the previous version and stop spending calls
         draft, content, checked = fixed, fixed_content, checked2
         problems = _problems(checked)
@@ -391,6 +400,7 @@ def tailor_resume(
     if coverage.missing_supported:
         # The model still left out keywords the candidate really has: add them in code rather than lose them.
         added = list(coverage.missing_supported)
+        say("Adding keywords you have to the skills section: " + ", ".join(added))
         draft = _add_keywords(draft, added)
         coverage = keyword_coverage(draft, keywords, source)
         trace.append({"step": len(trace) + 1, "type": "tool", "tool": "add missing keywords to skills",

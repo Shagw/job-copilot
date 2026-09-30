@@ -46,19 +46,33 @@ export function Notice({ children }: { children: ReactNode }) {
   )
 }
 
-/** Shown while an agent runs; the elapsed timer reassures users during 10-40s agent runs. */
-export function Working({ label }: { label: string }) {
+/**
+ * Shown while an agent runs: an elapsed timer, plus the live steps the server reports (the latest one is
+ * announced to screen readers; earlier ones are shown as done).
+ */
+export function Working({ label, steps = [] }: { label: string; steps?: string[] }) {
   const [seconds, setSeconds] = useState(0)
   useEffect(() => {
     const timer = setInterval(() => setSeconds((s) => s + 1), 1000)
     return () => clearInterval(timer)
   }, [])
   return (
-    <div className="working" role="status" aria-live="polite">
-      <span className="spinner" aria-hidden="true" />
-      <span>
-        {label} <span className="muted">({seconds}s)</span>
-      </span>
+    <div className="working-box">
+      <div className="working" role="status" aria-live="polite">
+        <span className="spinner" aria-hidden="true" />
+        <span>
+          {steps.length ? steps[steps.length - 1] : label} <span className="muted">({seconds}s)</span>
+        </span>
+      </div>
+      {steps.length > 1 && (
+        <ol className="live-steps" aria-label="Steps done so far">
+          {steps.slice(0, -1).map((s, i) => (
+            <li key={i}>
+              <span aria-hidden="true">✓</span> {s}
+            </li>
+          ))}
+        </ol>
+      )}
     </div>
   )
 }
