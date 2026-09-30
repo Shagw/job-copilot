@@ -1,5 +1,8 @@
 # Job Application Copilot
 
+[![CI](https://github.com/Shagw/job-copilot/actions/workflows/ci.yml/badge.svg)](https://github.com/Shagw/job-copilot/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 A human-in-the-loop AI assistant for job applications. Paste a job posting (or a public job link) and a set of
 AI agents parse it, score how well your resume fits (with quoted evidence), tailor your resume for the role, and
 write a cover letter reviewed by a critic agent. You review and edit every step. Nothing is auto-submitted.
@@ -7,7 +10,7 @@ write a cover letter reviewed by a critic agent. You review and edit every step.
 **Stack:** React + TypeScript (Vite) · FastAPI · SQLite · Groq LLMs · local embeddings (sentence-transformers) +
 ChromaDB · optional TypeSafe Jev for fast judgments · hand-written agent code (no LangChain / CrewAI).
 
-Full design: [ARCHITECTURE.md](ARCHITECTURE.md).
+Docs: [Fork guide](docs/FORKING.md) (run your own copy, step by step) · [Architecture](ARCHITECTURE.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md)
 
 ---
 
@@ -22,6 +25,30 @@ Full design: [ARCHITECTURE.md](ARCHITECTURE.md).
 
 Plus: accounts with email OTP verification, forgot password, 3-day history (then archived, never deleted),
 PDF + DOCX export (fpdf2 / python-docx), and an admin "AI status" page showing the Groq key/model pool.
+
+## Fork it and run your own
+
+Anyone can fork this and host a copy for themselves, friends or a class. **Step-by-step guide: [docs/FORKING.md](docs/FORKING.md)** (keys, setup, deploy,
+multi-user notes, customizing, troubleshooting). It's multi-user out of the box: people
+sign up with their email (OTP-verified), and each user's resume, jobs, history and RAG index are private to them.
+
+What you need (all have free tiers):
+
+| Service | For | Get it |
+|---------|-----|--------|
+| Groq | All writing (required) | [console.groq.com/keys](https://console.groq.com/keys). Keys from 2 accounts double the capacity. |
+| Gmail App Password (or any SMTP) | OTP emails to your users | Google Account → Security → 2-Step Verification → App passwords |
+| TypeSafe Jev | Faster, cheaper judgments (optional) | [console.typesafe.ai](https://console.typesafe.ai) |
+
+1. Fork, clone, and follow the Quick start below. Try it locally with `EMAIL_MODE=console` first.
+2. Set `ENVIRONMENT=production`, a fresh `JWT_SECRET`, `EMAIL_MODE=smtp` and your `ADMIN_EMAILS`.
+3. Build and run the single-origin server ([Production](#production-single-origin)) on any host that can keep
+   one Python process and a disk (a small VM, Railway, Render or Fly.io with a volume for `backend/storage/`),
+   behind HTTPS.
+
+Your API keys are shared by everyone using your copy. Per-user rate limits protect them, and Groq limits
+are per account, so a busy instance needs more accounts or a paid tier. Read [SECURITY.md](SECURITY.md) before
+opening it to other people: it stores their resumes.
 
 ## Quick start
 
@@ -197,9 +224,19 @@ approval that starts the next agent (edited requirements drive the fit score; th
 letter). Long runs show an elapsed timer; "AI busy" shows a live retry countdown; every result shows how the
 agent got there.
 
+## Contributing
+
+Issues and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md). Report security problems
+privately ([SECURITY.md](SECURITY.md)).
+
 ## Known limitations / next steps
 - Single process only (in-memory cooldowns and rate limits). Scaling out would move them to Redis.
 - Tables are created at startup; use Alembic migrations before evolving the schema with real data.
 - Archived sessions are kept forever. A real deployment needs a stated retention period (GDPR / India's DPDP Act).
 - JS-rendered career pages can't be fetched (no headless browser on the server); users paste instead.
 - The critic occasionally approves a letter while listing a minor issue; its notes are always shown to the user.
+
+## License
+
+[MIT](LICENSE) © 2026 Saumya Shashank. Dependencies keep their own licenses (for example fpdf2 is LGPL-3.0 and
+is used unmodified as a library).
