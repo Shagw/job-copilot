@@ -221,14 +221,16 @@ job_sessions  id, user_id, job_url, job_text, parsed_job (JSON), fit_result (JSO
 |------|-----------|
 | Auth | `POST /auth/signup`, `/auth/verify-otp`, `/auth/resend-otp`, `/auth/login`, `/auth/logout`, `/auth/forgot-password`, `/auth/reset-password`, `GET /auth/me` |
 | Resume | `POST /resume`, `GET /resume` |
-| Sessions | `POST /sessions` (text or URL → parse), `POST /sessions/{id}/fit`, `/tailor`, `/cover-letter`, `PATCH /sessions/{id}` (edits + status), `GET /sessions` (history, last 3 days), `GET /sessions/{id}`, `GET /sessions/{id}/export/{resume\|cover-letter}?format=docx\|pdf[&inline=true]` |
+| Sessions | `POST /sessions` (text or URL → parse), `POST /sessions/{id}/fit`, `/tailor` (`instructions`; plus `current_resume` to revise the current version), `/cover-letter`, `PATCH /sessions/{id}` (edits + status), `GET /sessions` (history, last 3 days), `GET /sessions/{id}`, `GET /sessions/{id}/export/{resume\|cover-letter}?format=docx\|pdf[&inline=true]` |
 | Ops | `GET /admin/llm-status` (only emails in `ADMIN_EMAILS`) |
 
 ## 8. Folder structure
 
 ```
 job-copilot/
-├── ARCHITECTURE.md   README.md
+├── README.md  ARCHITECTURE.md  CONTRIBUTING.md  SECURITY.md  LICENSE (MIT)
+├── docs/          USER_GUIDE.md (using the app), FORKING.md (run your own copy)
+├── .github/       workflows/ci.yml (offline tests on every push/PR), issue + PR templates
 ├── backend/
 │   ├── app/
 │   │   ├── main.py  config.py  database.py  models.py  schemas.py
@@ -263,6 +265,9 @@ job-copilot/
   the next agent.
 - The Resume tab shows the tailored resume as a **PDF preview** by default, with an "Edit text" toggle.
   "Save & preview" PATCHes the text, then reloads the PDF (a cache-busting `v` parameter).
+- **Ask for changes** on the Resume tab sends the current text (including unsaved edits) plus the request to
+  `/tailor` as `current_resume`; the result replaces the text, the preview reloads and the box clears for the
+  next request. The heading shows the revision count. It can be repeated any number of times.
 - Long agent runs show an elapsed-seconds timer. A 503 "AI is busy" shows a live retry countdown.
 - A job link the backend can't fetch (LinkedIn, JS-only pages) switches the form to paste mode.
 - Accessibility: labelled inputs with hints, `role="alert"`/`status` live regions, tab semantics,
@@ -292,13 +297,16 @@ permissions policy and HSTS in production. Startup refuses a `JWT_SECRET` under 
 
 ## 9c. Testing
 
-- **Backend (252):** offline, with a scripted `FakeLLM` and a fake embedder. Covers the auth flows,
+- **Backend (252):** offline, with a scripted `FakeLLM`, a `FakeJev` and a fake embedder. Covers the auth flows,
   OTP limits, RAG isolation between users, KeyPool failover, agent loops (text tool calls, retries, step limits),
-  scoring and grounding, ATS/claim checks, shortening, URL fetcher SSRF, archive and exports.
+  scoring and grounding, Jev client contract and fallbacks, ATS/claim checks, notes as facts, repeated
+  re-tailoring, shortening, URL fetcher SSRF, archive and exports.
 - **Frontend (29):** component and flow tests with mocked fetch.
 - **E2E (4):** real Chromium against the production build and real Groq. Covers the full journey, cookie and
   security headers, password reset and mobile layout. Fails on any JS error, CSP violation or unexpected failed
   request. It uses full Chromium because the default headless shell has no PDF viewer.
+- **CI** (GitHub Actions) runs the backend tests and the frontend typecheck, lint, tests and build on every
+  push and pull request, with no secrets. E2E needs real Groq keys, so it runs locally only.
 
 ## 10. Week plan
 
