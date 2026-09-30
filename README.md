@@ -238,5 +238,5 @@ privately ([SECURITY.md](SECURITY.md)).
 
 ## License
 
-[MIT](LICENSE) © 2026 Saumya Shashank. Dependencies keep their own licenses (for example fpdf2 is LGPL-3.0 and
+[MIT](LICENSE) © 2026 Shashank. Dependencies keep their own licenses (for example fpdf2 is LGPL-3.0 and
 is used unmodified as a library).
