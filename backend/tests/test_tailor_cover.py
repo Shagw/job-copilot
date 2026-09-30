@@ -92,30 +92,77 @@ def test_extract_tagged():
 
 # ---------- Resume Tailor agent ----------
 
-def test_tailor_agent_uses_tools_and_reports(resume_index):
-    resume_index.index_resume(1, 1, RESUME)
-    llm = FakeLLM(
-        [call("check_ats_coverage", {"draft": BAD_DRAFT}, "c1"), call("verify_claims", {"draft": BAD_DRAFT}, "c2")],
-        f"<resume>\n{TAILORED}\n</resume>\n<changes>\n- Added summary\n- Moved AWS up\n</changes>",
-    )
+def test_tailor_checks_draft_then_fixes_once(resume_index):
+    llm = FakeLLM(f"<resume>\n{BAD_DRAFT}\n</resume>",
+                  f"<resume>\n{TAILORED}\n</resume>\n<changes>\n- Added summary\n- Moved AWS up\n</changes>")
     text, report, run = tailor_resume(llm, JOB, RESUME, resume_index, 1)
 
-    assert text == TAILORED
+    assert text == TAILORED and len(llm.calls) == 2  # draft + ONE fix, no tool loop
     assert report.changes == ["Added summary", "Moved AWS up"]
     assert report.claims.ok and report.coverage_after.supported_percent == 100 and report.target_met
-    # The agent saw the real tool results for its bad draft.
-    observations = [json.loads(m["content"]) for m in llm.calls[1][0] if m["role"] == "tool"]
-    assert observations[0]["missing_do_not_add"] == ["Django", "Terraform"]
-    assert "Kubernetes" in observations[0]["covered"]  # present in the bad draft...
-    assert observations[1]["ok"] is False  # ...and flagged as unsupported by verify_claims
-    # Full drafts are trimmed in the stored trace.
-    assert all(len(t["args"].get("draft", "")) <= 301 for t in run.trace if t["type"] == "tool")
+    # The fix call was told exactly what code found in the bad draft.
+    fix_prompt = llm.calls[1][0][-1]["content"]
+    assert "'9' does not appear in the original resume" in fix_prompt
+    assert "'Kubernetes' is not in the original resume" in fix_prompt
+    assert [t["tool"] for t in run.trace if t["type"] == "tool"] == [
+        "write tailored draft", "check_ats_coverage + verify_claims", "fix reported problems",
+        "check_ats_coverage + verify_claims"]
 
 
-def test_tailor_report_catches_what_the_agent_missed(resume_index):
-    llm = FakeLLM(f"<resume>\n{BAD_DRAFT}\n</resume>")
+def test_clean_draft_needs_one_call(resume_index):
+    llm = FakeLLM(f"<resume>\n{TAILORED}\n</resume>")
+    _, report, _ = tailor_resume(llm, JOB, RESUME, resume_index, 1)
+    assert len(llm.calls) == 1 and report.target_met
+
+
+def test_tailor_report_catches_what_the_model_missed(resume_index):
+    llm = FakeLLM(f"<resume>\n{BAD_DRAFT}\n</resume>", f"<resume>\n{BAD_DRAFT}\n</resume>")  # "fix" changes nothing
     _, report, _ = tailor_resume(llm, JOB, RESUME, resume_index, 1)
     assert not report.claims.ok and not report.target_met
+
+
+def test_fix_that_makes_things_worse_is_discarded(resume_index):
+    worse = BAD_DRAFT + "\n- Led a team of 50 on Terraform"
+    llm = FakeLLM(f"<resume>\n{BAD_DRAFT}\n</resume>", f"<resume>\n{worse}\n</resume>")
+    text, _, _ = tailor_resume(llm, JOB, RESUME, resume_index, 1)
+    assert text == BAD_DRAFT
+
+
+def test_second_fix_round_when_the_first_only_helped_partly(resume_index):
+    half = TAILORED + "\n- Ran Kubernetes clusters in production"  # number fixed, invented skill still there
+    llm = FakeLLM(f"<resume>\n{BAD_DRAFT}\n</resume>", f"<resume>\n{half}\n</resume>", f"<resume>\n{TAILORED}\n</resume>")
+    text, report, run = tailor_resume(llm, JOB, RESUME, resume_index, 1)
+    assert text == TAILORED and len(llm.calls) == 3 and report.claims.ok
+    assert [t["tool"] for t in run.trace].count("fix reported problems") == 2
+
+
+def test_true_keywords_the_model_keeps_dropping_are_added_by_code(resume_index):
+    no_react = TAILORED.replace(", React", "")  # React is in the original resume and the job
+    llm = FakeLLM(*[f"<resume>\n{no_react}\n</resume>"] * 3)  # the "fixes" don't add it
+    text, report, run = tailor_resume(llm, JOB, RESUME, resume_index, 1)
+    assert "SKILLS\nPython, FastAPI, AWS, Docker, PostgreSQL\nAdditional: React" in text
+    assert report.coverage_after.missing_supported == [] and report.coverage_after.supported_percent == 100
+    assert report.changes[-1].startswith("Added to skills") and "React" in report.changes[-1]
+    assert run.trace[-1]["tool"] == "add missing keywords to skills" and run.trace[-1]["model"] == "code"
+    assert len(llm.calls) == 2  # the fix didn't help, so no second fix round
+
+
+def test_missing_keywords_get_a_skills_section_if_there_is_none(resume_index):
+    from app.agents.resume_tailor import _add_keywords
+
+    assert _add_keywords("Alice\n\nEXPERIENCE\n- Built APIs", ["React"]).endswith("\n\nSKILLS\n- Additional: React")
+    text = "TECHNICAL SKILLS\n- Backend: Node.js\n- Frontend: React\n\nEDUCATION\n- B.Tech"
+    assert _add_keywords(text, ["MongoDB"]) == ("TECHNICAL SKILLS\n- Backend: Node.js\n- Frontend: React\n"
+                                                "- Additional: MongoDB\n\nEDUCATION\n- B.Tech")
+
+
+def test_tailor_prompt_lists_keywords_it_may_and_must_not_add(resume_index):
+    llm = FakeLLM(f"<resume>\n{TAILORED}\n</resume>")
+    tailor_resume(llm, JOB, RESUME, resume_index, 1)
+    user_msg = llm.calls[0][0][1]["content"]
+    assert "never add these): Django, Kubernetes, Terraform" in user_msg
+    assert "show each one where it is true): Python, FastAPI, AWS, React" in user_msg
+    assert "tools" not in llm.calls[0][1]
 
 
 def test_tailor_prompt_contains_gaps_and_user_notes(resume_index):
@@ -129,16 +176,41 @@ def test_tailor_prompt_contains_gaps_and_user_notes(resume_index):
     assert "Emphasise leadership" in user_msg and "<original_resume>" in user_msg
 
 
+def test_skills_stated_in_notes_may_be_added_and_are_not_flagged(resume_index):
+    from app.agents.fit_scorer import FitResult
+
+    notes = "Please add Kubernetes and Terraform: I used both on my last project."
+    with_k8s = TAILORED + "\n- Skills: Kubernetes, Terraform"
+    fit = FitResult(score=50, verdict="Moderate fit", requirements=[], gaps=["Kubernetes", "Django"], advice=[])
+    llm = FakeLLM(f"<resume>\n{with_k8s}\n</resume>")
+    text, report, _ = tailor_resume(llm, JOB, RESUME, resume_index, 1, fit, notes)
+
+    user_msg = llm.calls[0][0][1]["content"]
+    assert "never add these): Django\n" in user_msg + "\n"  # only what neither resume nor notes support
+    assert "Kubernetes" in user_msg.split("show each one where it is true):")[1].split("\n")[0]
+    assert "do NOT claim these): Django" in user_msg  # the Kubernetes gap is covered by the notes
+    assert text == with_k8s and len(llm.calls) == 1  # no "fix" call stripping the requested keywords
+    assert report.claims.ok and "Kubernetes" in report.coverage_after.covered
+
+
+def test_skills_not_in_resume_or_notes_are_still_flagged(resume_index):
+    llm = FakeLLM(f"<resume>\n{TAILORED}\n- Skills: Kubernetes, Django\n</resume>",
+                  f"<resume>\n{TAILORED}\n- Skills: Kubernetes, Django\n</resume>")
+    _, report, _ = tailor_resume(llm, JOB, RESUME, resume_index, 1, None, "Add Kubernetes please")
+    flagged = " ".join(i.detail for i in report.claims.issues)
+    assert "Django" in flagged and "Kubernetes" not in flagged
+
+
 def test_tailor_without_tags_falls_back_to_content(resume_index):
     text, _, _ = tailor_resume(FakeLLM(TAILORED), JOB, RESUME, resume_index, 1)
     assert text == TAILORED
 
 
-def test_empty_final_answer_gets_one_nudge(resume_index):
+def test_empty_draft_gets_a_corrective_retry(resume_index):
     llm = FakeLLM("", f"<resume>\n{TAILORED}\n</resume>")
     text, _, run = tailor_resume(llm, JOB, RESUME, resume_index, 1)
-    assert text == TAILORED and run.trace[-1]["retry"] is True
-    assert llm.calls[1][1]["tool_choice"] == "none" and "required format" in llm.calls[1][0][-1]["content"]
+    assert text == TAILORED and any(t.get("retry") for t in run.trace)
+    assert "required format" in llm.calls[1][0][-1]["content"]
 
 
 def test_tailor_empty_output_raises(resume_index):
@@ -252,6 +324,41 @@ def test_full_flow_parse_fit_tailor_letter(logged_in, use_llm, resume_index):  #
     assert set(body["agent_trace"]) == {"fit", "tailor", "cover_letter"}
 
 
+def test_retailor_again_and_again_revises_the_current_version(logged_in, use_llm, resume_index):  # noqa: F811
+    upload_resume(logged_in)
+    s = start_session(logged_in, use_llm)
+    use_llm(FIT_FINAL)
+    logged_in.post(f"/sessions/{s['id']}/fit")
+    use_llm(f"<resume>\n{TAILORED}\n</resume>")
+    logged_in.post(f"/sessions/{s['id']}/tailor")
+
+    # Round 1: the user edited the text, then asks for a keyword their resume lacks.
+    edited = TAILORED + "\n\nINTERESTS\nOpen-source contributor"
+    v1 = edited + "\n\nSKILLS\n- Kubernetes"
+    llm = use_llm(f"<resume>\n{v1}\n</resume>\n<changes>\n- Added Kubernetes\n</changes>")
+    r = logged_in.post(f"/sessions/{s['id']}/tailor",
+                       json={"current_resume": edited, "instructions": "Add Kubernetes, I use it daily"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    prompt = llm.calls[0][0][1]["content"]
+    assert "REVISE" in prompt and "<current_tailored_resume>" in prompt and "Open-source contributor" in prompt
+    assert body["tailored_resume"] == v1 and len(llm.calls) == 1  # nothing flagged, no fix call
+    report = body["tailor_report"]
+    assert report["revision"] == 1 and report["notes"] == ["Add Kubernetes, I use it daily"] and report["claims"]["ok"]
+    assert [t["tool"] for t in body["agent_trace"]["tailor"]][0] == "revise with your requests"
+
+    # Round 2: a different request. Kubernetes (from round 1's note) is still trusted, Terraform is not.
+    v2 = v1.replace("SKILLS", "TECHNICAL SKILLS") + "\n- Terraform"
+    llm = use_llm(f"<resume>\n{v2}\n</resume>", f"<resume>\n{v2}\n</resume>")
+    body = logged_in.post(f"/sessions/{s['id']}/tailor",
+                          json={"current_resume": v1, "instructions": "Rename the skills section"}).json()
+    assert "Add Kubernetes, I use it daily" in llm.calls[0][0][1]["content"]  # earlier notes are carried over
+    report = body["tailor_report"]
+    assert report["revision"] == 2 and len(report["notes"]) == 2
+    flagged = " ".join(i["detail"] for i in report["claims"]["issues"])
+    assert "Terraform" in flagged and "Kubernetes" not in flagged
+
+
 def test_tailor_requires_resume(logged_in, use_llm, resume_index):  # noqa: F811
     s = start_session(logged_in, use_llm)
     use_llm()
@@ -333,10 +440,13 @@ def test_text_tool_calls_are_parsed():
     assert strip_tool_markup("Thinking.\n" + QWEN_CALL) == "Thinking."
 
 
-def test_agent_runs_text_tool_calls_instead_of_returning_them(resume_index):
-    llm = FakeLLM(QWEN_CALL, f"<resume>\n{TAILORED}\n</resume>\n<changes>\n- Reordered\n</changes>")
-    text, report, run = tailor_resume(llm, JOB, RESUME, resume_index, 1)
-    assert text == TAILORED
+def test_agent_runs_text_tool_calls_instead_of_returning_them():
+    from app.agents.base import run_agent
+    from app.agents.tools import verify_claims_tool
+
+    llm = FakeLLM(QWEN_CALL, "All checks passed.")
+    run = run_agent(llm, system="s", user="u", tools=[verify_claims_tool(JOB.keywords, RESUME)])
+    assert run.content == "All checks passed."
     tool_steps = [s for s in run.trace if s["type"] == "tool"]
     assert tool_steps[0]["tool"] == "verify_claims" and tool_steps[0]["text_call"] is True
     tool_msg = next(m for m in llm.calls[1][0] if m["role"] == "tool")

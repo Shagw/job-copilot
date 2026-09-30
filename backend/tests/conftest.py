@@ -11,6 +11,7 @@ os.environ["DATABASE_URL"] = f"sqlite:///{_tmpdir}/test.db"
 os.environ["EMAIL_MODE"] = "console"
 os.environ["GROQ_API_KEYS"] = "test-key-AAAA,test-key-BBBB"
 os.environ["GROQ_MODELS"] = "big-model,small-model"
+os.environ["TYPESAFE_API_KEY"] = ""  # tests never call the real Jev, even if .env has a key
 os.environ["CHROMA_PATH"] = f"{_tmpdir}/chroma"
 os.environ["ADMIN_EMAILS"] = "admin@example.com"
 os.environ["JWT_SECRET"] = "test-secret-" + "x" * 40

@@ -16,11 +16,12 @@ auto-submitted.
 │  React + Vite + TS      │ ◄─────────────────► │                                              │
 │                         │  JWT httpOnly cookie│  Auth ── bcrypt, JWT, OTP ──► Gmail SMTP      │
 │  Signup / Verify OTP    │                     │                                              │
-│  Login / Forgot pwd     │                     │  Agents ── ReAct loop (hand-built)            │
-│  Profile (upload CV)    │                     │    ├─► Tools ──► RAG (sentence-transformers   │
-│  New Job wizard         │                     │    │              + ChromaDB, per user)       │
-│  History (3 days)       │                     │    └─► KeyPool ──► Groq (key A, key B,        │
-│  Agent reasoning trace  │                     │                     + fallback models)        │
+│  Login / Forgot pwd     │                     │  Agents ── code-driven steps (hand-built)     │
+│  Profile (upload CV)    │                     │    ├─► RAG (sentence-transformers             │
+│  New Job wizard         │                     │    │     + ChromaDB, per user)                │
+│  History (3 days)       │                     │    ├─► KeyPool ──► Groq: writes (key A, key B,│
+│  Agent reasoning trace  │                     │    │                + fallback models)        │
+│  PDF preview            │                     │    └─► TypeSafe Jev (optional): judges        │
 └─────────────────────────┘                     │  SQLite (SQLAlchemy)                          │
                                                 └──────────────────────────────────────────────┘
 ```
@@ -57,38 +58,70 @@ Password login + email OTP verification.
 
 ## 3. AI agents
 
-| Step | Type | Tools |
-|------|------|-------|
-| Job Parser | Single LLM call, JSON output (an agent would be over-engineering) | — |
-| Fit Scorer | Agent: gathers evidence per requirement before scoring | `search_my_experience` |
-| Resume Tailor | ReAct agent: loops until ≥80% must-have keyword coverage and all claims grounded | `search_my_experience`, `check_ats_coverage`, `verify_claims` |
-| Cover Letter | Writer ⇄ Critic, max 3 rounds | `search_my_experience` |
+Two kinds of model, each used for what it's good at:
+- **Groq LLMs write**: the parsed job, the tailored resume, the cover letter.
+- **TypeSafe Jev judges** (optional, `TYPESAFE_API_KEY`). It never writes text; it answers typed questions
+  (`choice`, `score`, yes/no `noul`) about a state in one parallel call (~0.1-0.5s, billed on input only).
+  Every Jev step has a Groq fallback: without a key, or when Jev fails (401/422/429/529/network), the step
+  uses Groq instead of failing.
+- **Code decides** everything that can be computed: retrieval, grounding, keyword coverage, invented
+  numbers/skills, years of experience, the score, and when to stop.
 
-- Hand-written agent loop using Groq tool calling (no LangChain/CrewAI).
-- Every agent has a max-step limit; the reasoning trace is stored and shown in the UI.
-- Agents never invent experience: tools only return the user's own resume chunks.
+| Step | Groq calls | Jev | What code does |
+|------|-----------|-----|----------------|
+| Job Parser | 1 (JSON mode) | — | shortens long postings, validates the output |
+| Fit Scorer | 0 with Jev; else 1 (+1 only for skipped requirements) | 1 call: per requirement a match `choice` + a `noul` per candidate line | retrieves evidence lines, verifies quotes, years check, score, summary/strengths/advice |
+| Resume Tailor | 1 draft + at most 2 fixes | 1 call: a `noul` per changed line ("supported by the original?") | keyword guidance in the prompt, coverage + claim checks, keeps a fix only if it's strictly better, adds true-but-missing keywords itself |
+| Cover Letter | 1 per round (max 3) | Critic: 1 `score` + 6 `noul` checks per round | hard lint (invented numbers, placeholders, length) vetoes approval |
 
-**Fit scoring is done by code, not by the LLM.** The agent only classifies each
-requirement (strong / partial / missing) with a quoted evidence snippet. Then:
-1. Each evidence quote is checked against the resume text; unverified quotes are
-   dropped and that requirement becomes "missing".
-2. Requirements the model skipped are filled in as "missing".
-3. Score = Σ weight × credit / Σ weight, with must = 2, nice = 1 and
-   strong = 1, partial = 0.5, missing = 0. ≥75 strong fit, ≥50 moderate, else weak.
+Measured live on the same real job and resume with Groq only: **~67k → ~15k tokens** for Fit + Tailor + Letter.
+E2E timings: fit 1.8s, tailor 2.3s, letter 3.4s. With Jev, Fit and the Critic use no Groq tokens.
+`LLM_REASONING_EFFORT=low` (gpt-oss "low", qwen3 "none") roughly halves hidden reasoning tokens (measured
+165 → 71 on the same prompt, same answer).
 
-Job text and tool results are treated as untrusted data in every prompt (prompt-injection defence).
+**Why not a ReAct loop everywhere?** The first version ran agent loops for Fit, Tailor and Writer. Live traces
+showed ~7 calls per step, each re-sending the whole resume, while the "decisions" (which tool next) were ones
+code already knew: the checks are deterministic and the resume fits in the prompt. The hand-written ReAct loop
+(`agents/base.py`: tool calls, text-form tool calls, corrective retries, budget trimming) is kept and tested
+for steps that genuinely need open-ended tool use.
 
-**Resume Tailor.** `check_ats_coverage` and `verify_claims` are plain Python (`agents/ats.py`), not LLM calls:
-- Coverage splits job keywords into *covered*, *missing but supported* (in the original resume → add them)
-  and *missing, unsupported* (→ never add). Matching handles `CI/CD`, `C++`, `Node.js`, plurals and aliases (`k8s`).
-- Claim check flags numbers and job skills in the draft that the original resume doesn't contain.
-- After the agent finishes, code re-runs both checks and stores a report (coverage before/after, remaining
-  issues, list of changes) for the user to review. Nothing is auto-approved.
+**Fit scoring is done by code, not by a model.**
+1. Code retrieves candidate evidence per requirement: per-user RAG hits, lines mentioning the requirement's
+   keywords, and dated role lines for years requirements. Each line gets an id (L1, L2…).
+2. Jev (or one Groq call) labels each requirement strong / partial / missing. With Jev, every
+   (requirement, line) pair is also a yes/no question in the same call; code picks the most likely line as
+   evidence and the line answers can only *lower* a label (strong needs a line ≥0.6, partial ≥0.3). Headings
+   and bare company names are never evidence. Evidence is always a verbatim resume line.
+3. **Years guard:** for "N+ years of X", code adds up the dated roles whose bullets mention X (overlaps merged);
+   below N, "strong" becomes "partial" with a note. Neither LLMs nor Jev are reliable at date arithmetic.
+4. Score = Σ weight × credit / Σ weight (must = 2, nice = 1; strong = 1, partial = 0.5, missing = 0).
+   ≥75 strong fit, ≥50 moderate, else weak. Summary, strengths and advice are written by code from the
+   verified labels; free text citing numbers absent from the resume and job is dropped.
 
-**Writer ⇄ Critic.** Each round: Writer agent drafts → code lint (hard: invented numbers, placeholders,
-length; soft: clichés, skills the resume lacks) → LLM Critic scores 1-10. Approved only if the Critic approves
-*and* there are no hard issues. Otherwise the feedback goes back to the Writer, max 3 rounds. The last draft is
-always returned with its status.
+Job text, resume text and tool results are untrusted data in every prompt (prompt-injection defence). Jev
+doesn't treat its state as hostile, so it never decides alone: code thresholds and combines its answers.
+
+**Resume Tailor.** `keyword_coverage` and `verify_claims` are plain Python (`agents/ats.py`):
+- Coverage splits job keywords into *covered*, *missing but supported* (in the original → add) and
+  *missing, unsupported* (→ never add). Handles `CI/CD`, `C++`, `Node.js`, plurals and aliases (`k8s`).
+- The claim check flags numbers (digits and number words) and job skills the original resume lacks.
+- Jev adds a semantic check regexes can't do: invented responsibilities ("owned incident response").
+- Up to 2 fix rounds; a fix is kept only if it's strictly better (an unsupported claim counts double a missing
+  keyword). Keywords the candidate has that the model still leaves out are added to the skills section by code.
+- **The candidate's notes are facts.** Skills they state ("I used MongoDB in side projects") move from
+  "never add" to "may add", and every check (regex and Jev) accepts them. Jev gets the resume, notes and
+  current version as separate state fields.
+- **Re-tailor, repeatedly.** `POST /sessions/{id}/tailor` with `current_resume` revises the current (possibly
+  hand-edited) version with the user's requests (format, a section, the summary, keywords) instead of starting
+  over. Notes from every round are kept in the report and stay trusted; the current version counts as a source,
+  so the checks judge only what the revision adds.
+- The report (coverage before/after, remaining issues, changes, revision, notes) is recomputed on the final text.
+
+**Writer ⇄ Critic.** Each round: one Writer call → code lint (hard: invented numbers, placeholders, length;
+soft: clichés, unbacked skills) → Critic. The Jev Critic's quality `score` maps to 2-10 and its yes/no checks
+(specific evidence, addresses requirements, names the role, grounded, implies missing skills, clichés) map to
+fixed feedback for the next round; without Jev a Groq hiring-manager review does the same job. Approved only if
+the Critic approves *and* there are no hard issues; max 3 rounds; the last draft is always returned.
 
 **Robustness.**
 - If a final answer is empty, in the wrong format or contains tool-call markup, the agent gets up to 2
@@ -203,7 +236,7 @@ job-copilot/
 │   │   ├── routers/     auth.py, resume.py, sessions.py, admin.py
 │   │   ├── agents/      base.py (ReAct loop), tools.py, ats.py (coverage + claim checks), job_parser.py,
 │   │   │                fit_scorer.py, resume_tailor.py, cover_writer.py, cover_critic.py
-│   │   ├── llm/         key_pool.py, groq_client.py
+│   │   ├── llm/         key_pool.py, groq_client.py, jev_client.py (TypeSafe Jev, optional)
 │   │   ├── rag/         embeddings.py, store.py (chunking + per-user ChromaDB index)
 │   │   ├── agents/…     + shorten.py (fit long inputs to the token budget)
 │   │   ├── server.py    production site: built frontend at /, API at /api, security headers
@@ -243,7 +276,7 @@ job-copilot/
 | Backend | FastAPI, Pydantic, SQLAlchemy 2, SQLite |
 | Auth | `bcrypt`, `PyJWT`, httpOnly cookie |
 | Email | `smtplib` (Gmail SMTP) / console mode |
-| LLM | Groq SDK |
+| LLM | Groq SDK (writing); TypeSafe Jev over HTTP with httpx (judgments, optional) |
 | RAG | sentence-transformers (`all-MiniLM-L6-v2`), ChromaDB |
 | Files | pypdf (read), python-docx (DOCX), fpdf2 (PDF) |
 | Tests | pytest + FastAPI TestClient (fake LLM/embedder), Vitest + Testing Library, Playwright (full Chromium) |
@@ -259,10 +292,10 @@ permissions policy and HSTS in production. Startup refuses a `JWT_SECRET` under 
 
 ## 9c. Testing
 
-- **Backend (222):** offline, with a scripted `FakeLLM` and a fake embedder. Covers the auth flows,
+- **Backend (252):** offline, with a scripted `FakeLLM` and a fake embedder. Covers the auth flows,
   OTP limits, RAG isolation between users, KeyPool failover, agent loops (text tool calls, retries, step limits),
   scoring and grounding, ATS/claim checks, shortening, URL fetcher SSRF, archive and exports.
-- **Frontend (28):** component and flow tests with mocked fetch.
+- **Frontend (29):** component and flow tests with mocked fetch.
 - **E2E (4):** real Chromium against the production build and real Groq. Covers the full journey, cookie and
   security headers, password reset and mobile layout. Fails on any JS error, CSP violation or unexpected failed
   request. It uses full Chromium because the default headless shell has no PDF viewer.

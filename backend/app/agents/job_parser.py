@@ -97,7 +97,7 @@ def parse_job(llm: LLMClient, job_text: str) -> ParsedJob:
         ],
         response_format={"type": "json_object"},
         temperature=0.1,
-        max_tokens=3000,
+        max_tokens=2000,
     )
     parsed = parse_structured(llm, result.message.content or "", ParsedJob)
     if not parsed.title and not parsed.must_have and not parsed.keywords:

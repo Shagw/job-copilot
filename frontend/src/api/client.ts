@@ -101,8 +101,12 @@ export const api = {
   createSession: (input: { job_text?: string; job_url?: string }) => post<JobSession>('/sessions', input),
   runFit: (id: number, parsed_job?: ParsedJob) =>
     post<JobSession>(`/sessions/${id}/fit`, parsed_job ? { parsed_job } : {}),
-  runTailor: (id: number, instructions?: string) =>
-    post<JobSession>(`/sessions/${id}/tailor`, instructions ? { instructions } : {}),
+  /** Tailor from the original resume, or (with `current_resume`) revise the current tailored version. */
+  runTailor: (id: number, instructions?: string, current_resume?: string) =>
+    post<JobSession>(`/sessions/${id}/tailor`, {
+      ...(instructions ? { instructions } : {}),
+      ...(current_resume ? { current_resume } : {}),
+    }),
   runCoverLetter: (id: number, tailored_resume?: string, instructions?: string) =>
     post<JobSession>(`/sessions/${id}/cover-letter`, {
       ...(tailored_resume ? { tailored_resume } : {}),

@@ -168,7 +168,7 @@ function FitStep({ session, onDone }: StepProps) {
       <h2>How well you fit</h2>
       <FitCard fit={session.fit_result!} />
       <AgentTraceView steps={session.agent_trace?.fit} />
-      <Field label="Notes for the resume tailor (optional)" hint='For example: "Emphasise leadership" or "Keep it to one page".'>
+      <Field label="Notes for the resume tailor (optional)" hint='For example: "Emphasise leadership" or "I have used MongoDB in side projects; add it". Skills you state here count as true and may be added.'>
         {(id, hint) => (
           <textarea id={id} aria-describedby={hint} rows={2} maxLength={1000} value={notes}
             onChange={(e) => setNotes(e.target.value)} />
@@ -194,7 +194,21 @@ function ResumeStep({ session, onDone, onSaved }: StepProps & { onSaved: (s: Job
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<unknown>(null)
   const { busy, error, run } = useAgentRun()
+  const [changes, setChanges] = useState('')
+  const retailor = useAgentRun()
   const dirty = text !== session.tailored_resume
+  const revision = session.tailor_report?.revision ?? 0
+
+  /** Revise the current text (including unsaved edits) with the user's requests; repeatable. */
+  function reTailor() {
+    retailor.run(() => api.runTailor(session.id, changes.trim(), text), (s) => {
+      onSaved(s)
+      setText(s.tailored_resume!)
+      setChanges('')
+      setVersion((v) => v + 1)
+      setMode('preview')
+    })
+  }
 
   /** The PDF is rendered from the saved text, so save edits before showing the preview. */
   async function showPreview() {
@@ -241,6 +255,27 @@ function ResumeStep({ session, onDone, onSaved }: StepProps & { onSaved: (s: Job
           )}
         </Field>
       )}
+      <section className="retailor" aria-labelledby="retailor-title">
+        <h3 id="retailor-title">
+          Ask for changes {revision > 0 && <span className="muted small">(revised {revision}×)</span>}
+        </h3>
+        <Field label="What should change?"
+          hint='For example: "Fix the formatting", "Add MongoDB, I used it in side projects", "Improve the summary", "Rewrite the projects section". Works on the current text, including your edits. Skills you state count as true.'>
+          {(id, hint) => (
+            <textarea id={id} aria-describedby={hint} rows={3} maxLength={1000} value={changes}
+              onChange={(e) => setChanges(e.target.value)} />
+          )}
+        </Field>
+        <ErrorAlert error={retailor.error} />
+        <div className="actions">
+          <button type="button" className="secondary"
+            disabled={retailor.busy || busy || saving || !changes.trim() || text.trim().length < 50}
+            onClick={reTailor}>
+            Re-tailor with these changes
+          </button>
+        </div>
+        {retailor.busy && <Working label="Resume Tailor is applying your changes and re-checking the resume" />}
+      </section>
       <Field label="Notes for the cover letter (optional)" hint="Why this company, tone, anything personal to mention.">
         {(id, hint) => (
           <textarea id={id} aria-describedby={hint} rows={2} maxLength={1000} value={notes}
@@ -255,7 +290,7 @@ function ResumeStep({ session, onDone, onSaved }: StepProps & { onSaved: (s: Job
         <a className="button secondary" href={api.exportUrl(session.id, 'resume')}>
           Download DOCX
         </a>
-        <button type="button" className="primary" disabled={busy || saving || text.trim().length < 50}
+        <button type="button" className="primary" disabled={busy || retailor.busy || saving || text.trim().length < 50}
           onClick={() => run(() => api.runCoverLetter(session.id, text, notes.trim() || undefined), onDone)}>
           Approve & write cover letter
         </button>

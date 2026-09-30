@@ -266,6 +266,41 @@ describe('session wizard', () => {
     })
   })
 
+  it('re-tailors the current text with requested changes, again and again', async () => {
+    loggedIn()
+    const v0 = 'Alice Example\n\nEXPERIENCE\n- Built APIs in Python with FastAPI at Acme for three years'
+    const v1 = v0 + '\n\nSKILLS\n- MongoDB'
+    const v2 = v1.replace('SKILLS', 'TECHNICAL SKILLS')
+    f.on('GET', '/sessions/7', { body: session({ fit_result: FIT, tailored_resume: v0, current_step: 'tailored' }) })
+    let round = 0
+    f.on('POST', '/sessions/7/tailor', () => {
+      round += 1
+      return { body: session({ fit_result: FIT, tailored_resume: round === 1 ? v1 : v2, current_step: 'tailored',
+        tailor_report: { coverage_before: { total: 1, covered: [], missing_supported: [], missing_unsupported: [], percent: 0, supported_percent: 0 },
+          coverage_after: { total: 1, covered: ['MongoDB'], missing_supported: [], missing_unsupported: [], percent: 100, supported_percent: 100 },
+          claims: { ok: true, issues: [] }, changes: [], target_met: true, revision: round, notes: [] } }) }
+    })
+    renderApp('/sessions/7')
+    const user = userEvent.setup()
+
+    const button = await screen.findByRole('button', { name: 'Re-tailor with these changes' })
+    expect(button).toBeDisabled() // nothing requested yet
+    await user.click(screen.getByRole('button', { name: 'Edit text' }))
+    await user.type(screen.getByLabelText('Resume text'), ' (edited)')
+    await user.type(screen.getByLabelText('What should change?'), 'Add MongoDB, I used it in side projects')
+    await user.click(button)
+
+    expect(await screen.findByText('(revised 1×)')).toBeInTheDocument()
+    expect(screen.getByLabelText('What should change?')).toHaveValue('') // ready for the next request
+    const tailorCalls = () => f.calls.filter((c) => c.path === '/sessions/7/tailor')
+    expect(tailorCalls()[0].body).toEqual({ instructions: 'Add MongoDB, I used it in side projects', current_resume: v0 + ' (edited)' })
+
+    await user.type(screen.getByLabelText('What should change?'), 'Rename the skills section')
+    await user.click(screen.getByRole('button', { name: 'Re-tailor with these changes' }))
+    expect(await screen.findByText('(revised 2×)')).toBeInTheDocument()
+    expect(tailorCalls()[1].body).toEqual({ instructions: 'Rename the skills section', current_resume: v1 }) // the new version
+  })
+
   it('previews the tailored resume as a PDF and saves edits before re-rendering it', async () => {
     loggedIn()
     const tailored = 'Alice Example\n\nEXPERIENCE\n- Built APIs in Python with FastAPI at Acme for three years'

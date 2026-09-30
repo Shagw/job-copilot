@@ -10,6 +10,7 @@ Two layers:
 from __future__ import annotations
 
 import json
+import logging
 import re
 
 from pydantic import BaseModel, field_validator
@@ -19,6 +20,9 @@ from app.agents.base import parse_structured
 from app.agents.job_parser import ParsedJob
 from app.agents.shorten import char_budget, shorten
 from app.llm.groq_client import LLMClient
+from app.llm.jev_client import JevUnavailable, noul, score
+
+log = logging.getLogger("app.agents.critic")
 
 MIN_WORDS, MAX_WORDS = 150, 500
 CLICHES = [
@@ -114,9 +118,69 @@ Reply with ONLY this JSON:
 }"""
 
 
+# ---- Jev critic: one parallel call, feedback mapped from typed answers ----
+
+QUALITY_LEVELS = [
+    "Generic or off-target; a hiring manager would discard it",
+    "Weak: little concrete evidence tied to this job",
+    "Adequate, but generic in places",
+    "Good: specific evidence tied to the key requirements",
+    "Excellent: specific, fully grounded and compelling for this exact job",
+]
+# key -> (question, answer that is GOOD, issue if not, suggestion)
+JEV_CHECKS = {
+    "specific_evidence": ("Does `letter` cite at least two concrete achievements taken from `resume`?", True,
+                          "Too few concrete achievements from the resume.",
+                          "Cite 2-3 specific achievements from the resume (with their real numbers) that match the job."),
+    "addresses_requirements": ("Does `letter` connect the candidate's experience to the most important "
+                               "requirements in `job`?", True,
+                               "Doesn't clearly address the job's key requirements.",
+                               "Tie each evidence paragraph to one of the job's must-have requirements."),
+    "names_role": ("Does the opening paragraph of `letter` name the role being applied for?", True,
+                   "The opening doesn't name the role.", "Name the role (and the company) in the first sentence."),
+    "grounded": ("Is every claim about the candidate in `letter` supported by `resume`?", True,
+                 "Some claims aren't supported by the resume.",
+                 "Remove or reword any claim that the resume doesn't back up."),
+    "implies_missing": ("Does `letter` imply the candidate has experience with something `job` asks for that "
+                        "`resume` does not show?", False,
+                        "Implies experience the resume doesn't show.",
+                        "For skills you lack, say nothing or express willingness to learn; never imply experience."),
+    "cliches": ("Does `letter` rely on generic, clichéd phrases instead of specifics?", False,
+                "Relies on generic, clichéd phrasing.", "Replace generic phrases with specific facts from the resume."),
+}
+JEV_PASS_SCORE = 7
+
+
+def critique_with_jev(jev, letter: str, job: ParsedJob, source: str) -> tuple[Critique, dict]:
+    questions = {"quality": score("How strong is `letter` as a cover letter for `job`, given `resume`?",
+                                  QUALITY_LEVELS)}
+    questions |= {k: noul(q) for k, (q, *_rest) in JEV_CHECKS.items()}
+    state = {"job": {"title": job.title, "company": job.company, "must_have": job.must_have,
+                     "nice_to_have": job.nice_to_have},
+             "resume": source[:30_000], "letter": letter}
+    res = jev.ask(state, questions)
+    level, _ = res.score("quality")
+    value = 2 + round(2 * (level or 0))  # levels 0-4 -> 2,4,6,8,10
+    issues, suggestions = [], []
+    for key, (_, good, issue, tip) in JEV_CHECKS.items():
+        if (res.noul(key, 0.5) >= 0.5) != good:
+            issues.append(issue)
+            suggestions.append(tip)
+    review = Critique(score=value, approved=value >= JEV_PASS_SCORE and not issues,
+                      issues=issues, suggestions=suggestions)
+    return review, res.trace("Jev: reviewed the letter")
+
+
 def critique(
-    llm: LLMClient, letter: str, job: ParsedJob, source: str, lint: Lint
+    llm: LLMClient, letter: str, job: ParsedJob, source: str, lint: Lint, jev=None
 ) -> Critique:
+    """Jev first (fast, cheap); a Groq hiring-manager review when Jev isn't configured or fails."""
+    if jev is not None:
+        try:
+            review, _ = critique_with_jev(jev, letter, job, source)
+            return review
+        except JevUnavailable as e:
+            log.info("Critic: Jev unavailable (%s), using Groq", e)
     source = shorten(source, char_budget(llm, 1500, len(SYSTEM) + len(letter) + 2000), job.keywords).text
     checks = "\n".join(f"- {x}" for x in lint.hard + lint.soft) or "- none"
     user = (
@@ -129,6 +193,6 @@ def critique(
         [{"role": "system", "content": SYSTEM}, {"role": "user", "content": user}],
         response_format={"type": "json_object"},
         temperature=0,
-        max_tokens=3000,
+        max_tokens=1200,
     )
     return parse_structured(llm, result.message.content or "", Critique)

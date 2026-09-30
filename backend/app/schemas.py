@@ -154,6 +154,8 @@ class FitRequest(BaseModel):
 
 class TailorRequest(BaseModel):
     instructions: str | None = Field(None, max_length=1000)  # e.g. "emphasise leadership"
+    # Re-tailor: the current tailored resume (possibly edited by the user) to revise with `instructions`.
+    current_resume: str | None = Field(None, min_length=50, max_length=20_000)
 
 
 class CoverLetterRequest(BaseModel):

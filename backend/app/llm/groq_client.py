@@ -98,6 +98,22 @@ def parse_retry_after(err: groq.APIStatusError, default: float) -> float:
     return default
 
 
+def reasoning_params(model: str, effort: str) -> dict:
+    """Keep hidden reasoning short: it counts against Groq's per-minute token limit and adds latency.
+
+    gpt-oss accepts low/medium/high; qwen3 also accepts "none" (no reasoning at all). Other models
+    get nothing. effort="" disables this entirely.
+    """
+    if not effort:
+        return {}
+    if model.startswith("openai/gpt-oss"):
+        return {"reasoning_effort": "low" if effort == "none" else effort}
+    if model.startswith("qwen/qwen3"):
+        # "low" = as cheap as possible: qwen3 can switch reasoning off completely.
+        return {"reasoning_effort": "none" if effort == "low" else effort, "reasoning_format": "hidden"}
+    return {}
+
+
 class LLMClient:
     def __init__(
         self,
@@ -106,6 +122,7 @@ class LLMClient:
         max_wait: float = 10,
         timeout: float = 60,
         max_request_tokens: int | None = None,
+        reasoning_effort: str = "",
         client_factory: Callable[[str], Any] | None = None,
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.monotonic,
@@ -114,6 +131,7 @@ class LLMClient:
         self.default_cooldown = default_cooldown
         self.max_wait = max_wait
         self.max_request_tokens = max_request_tokens
+        self.reasoning_effort = reasoning_effort
         self._sleep = sleep
         self._clock = clock
         # max_retries=0: the SDK must NOT retry on its own; the pool decides.
@@ -144,6 +162,7 @@ class LLMClient:
         deadline = self._clock() + self.max_wait
         max_attempts = max(20, len(self.pool.slots) * 4)  # safety net only
         params = dict(params)
+        effort = params.pop("reasoning_effort", self.reasoning_effort)  # per-call override, e.g. "medium"
         if self.max_request_tokens:
             params["max_tokens"] = fit_max_tokens(
                 params.get("max_tokens"), estimate_tokens(messages, params.get("tools")), self.max_request_tokens
@@ -152,7 +171,8 @@ class LLMClient:
         for _ in range(max_attempts):
             slot = self._acquire_with_wait(deadline)
             try:
-                resp = self._client_for(slot).chat.completions.create(model=slot.model, messages=messages, **params)
+                call = {**reasoning_params(slot.model, effort), **params}
+                resp = self._client_for(slot).chat.completions.create(model=slot.model, messages=messages, **call)
                 return ChatResult(message=resp.choices[0].message, model=slot.model, slot=slot.index, usage=resp.usage)
             except groq.RateLimitError as e:
                 self.pool.mark_rate_limited(slot, parse_retry_after(e, self.default_cooldown), "429 rate limited")
@@ -204,4 +224,5 @@ def get_llm() -> LLMClient:
         max_wait=s.llm_max_wait_seconds,
         timeout=s.llm_request_timeout_seconds,
         max_request_tokens=s.llm_max_request_tokens,
+        reasoning_effort=s.llm_reasoning_effort,
     )

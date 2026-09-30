@@ -44,6 +44,14 @@ class Settings(BaseSettings):
     # Groq counts prompt + max_tokens against the per-minute token limit (8000 on the free tier),
     # so a single request larger than this is rejected with 413.
     llm_max_request_tokens: int = 8000
+    # Hidden reasoning tokens also count against that limit. "low" = gpt-oss low, qwen3 none; "" = model default.
+    llm_reasoning_effort: str = "low"
+
+    # TypeSafe Jev: fast typed judgments (labels, scores, yes/no). Optional; Groq is used when unset.
+    typesafe_api_key: str = ""
+    typesafe_model: str = "jev-1.13.0"  # pinned: thresholds are tuned against a specific version
+    typesafe_base_url: str = "https://api.typesafe.ai"
+    typesafe_timeout_seconds: float = 15
 
     # Admin
     admin_emails: str = ""

@@ -21,6 +21,7 @@ from app.auth.deps import get_current_user
 from app.auth.rate_limit import RateLimiter
 from app.config import get_settings
 from app.database import get_db
+from app.llm.jev_client import get_jev
 from app.llm.groq_client import LLMClient, get_llm
 from app.models import JobSession, Resume, User, as_utc
 from app.rag.store import ResumeIndex, get_resume_index
@@ -143,6 +144,7 @@ def run_fit(
     db: Session = Depends(get_db),
     llm: LLMClient = Depends(get_llm),
     index: ResumeIndex = Depends(get_resume_index),
+    jev=Depends(get_jev),
 ):
     session = get_visible_session(db, user, session_id)
     resume = _require_resume(db, user)
@@ -151,7 +153,7 @@ def run_fit(
         session.parsed_job = body.parsed_job.model_dump()
 
     job = ParsedJob.model_validate(session.parsed_job or {})
-    result, run = score_fit(llm, job, index, user.id, resume.raw_text)
+    result, run = score_fit(llm, job, index, user.id, resume.raw_text, jev)
 
     session.fit_result = result.model_dump()
     # Reassign (not mutate) so SQLAlchemy notices the JSON change.
@@ -169,14 +171,22 @@ def run_tailor(
     db: Session = Depends(get_db),
     llm: LLMClient = Depends(get_llm),
     index: ResumeIndex = Depends(get_resume_index),
+    jev=Depends(get_jev),
 ):
     session = get_visible_session(db, user, session_id)
     resume = _require_resume(db, user)
     job = ParsedJob.model_validate(session.parsed_job or {})
     fit = FitResult.model_validate(session.fit_result) if session.fit_result else None
 
-    text, report, run = tailor_resume(llm, job, resume.raw_text, index, user.id, fit,
-                                      body.instructions if body else None)
+    current = body.current_resume.strip() if body and body.current_resume else None
+    previous = session.tailor_report or {}
+    text, report, run = tailor_resume(
+        llm, job, resume.raw_text, index, user.id, fit, body.instructions if body else None, jev=jev,
+        current=current,
+        # Notes from earlier rounds stay true facts when revising; a fresh tailoring starts over.
+        prior_notes=previous.get("notes", []) if current else None,
+        revision=previous.get("revision", 0) + 1 if current else 0,
+    )
     session.tailored_resume = text
     session.tailor_report = report.model_dump()
     session.agent_trace = {**(session.agent_trace or {}), "tailor": run.trace}
@@ -193,6 +203,7 @@ def run_cover_letter(
     db: Session = Depends(get_db),
     llm: LLMClient = Depends(get_llm),
     index: ResumeIndex = Depends(get_resume_index),
+    jev=Depends(get_jev),
 ):
     session = get_visible_session(db, user, session_id)
     resume = _require_resume(db, user)
@@ -203,7 +214,7 @@ def run_cover_letter(
 
     letter, report, trace = write_cover_letter(
         llm, job, session.job_text, session.tailored_resume or resume.raw_text, resume.raw_text,
-        index, user.id, fit, body.instructions if body else None,
+        index, user.id, fit, body.instructions if body else None, jev=jev,
     )
     session.cover_letter = letter
     session.cover_letter_report = report.model_dump()

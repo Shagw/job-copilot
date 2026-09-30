@@ -537,6 +537,17 @@ details summary {
 }
 
 /* Resume step: PDF preview / text editor toggle */
+.retailor {
+  margin: 1.5rem 0;
+  padding: 1rem;
+  border: 1px solid var(--border, #d0d5dd);
+  border-radius: 8px;
+}
+
+.retailor h3 {
+  margin-top: 0;
+}
+
 .doc-toolbar {
   display: flex;
   align-items: center;

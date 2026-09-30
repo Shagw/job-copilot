@@ -138,7 +138,7 @@ export function TailorReportView({ report }: { report: TailorReport }) {
       </p>
       {after.missing_supported.length > 0 && (
         <p>
-          You have these but the draft doesn't show them: <Chips items={after.missing_supported} kind="ok" />
+          In your resume, but missing from the tailored version: <Chips items={after.missing_supported} kind="ok" />
         </p>
       )}
       <p>

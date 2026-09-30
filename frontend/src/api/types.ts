@@ -76,6 +76,10 @@ export interface TailorReport {
   target_met: boolean
   /** Set when the resume was too long and the AI worked from a shortened version. */
   note?: string | null
+  /** 0 = first tailoring; 1, 2, ... = re-tailored with the user's change requests. */
+  revision?: number
+  /** Every note given so far (trusted facts for later revisions). */
+  notes?: string[]
 }
 
 export interface CoverLetterRound {

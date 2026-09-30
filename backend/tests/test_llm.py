@@ -332,3 +332,35 @@ def test_unwanted_tool_call_tries_next_slot():
     llm, _, _, calls = make_llm({("A", "big"): [err]})
     assert llm.chat(MSG, tool_choice="none").message.content == "B/big"
     assert calls == [("A", "big"), ("B", "big")]
+
+
+# ---------- reasoning effort (fewer hidden reasoning tokens) ----------
+
+def test_reasoning_params_per_model():
+    from app.llm.groq_client import reasoning_params
+
+    assert reasoning_params("openai/gpt-oss-120b", "low") == {"reasoning_effort": "low"}
+    assert reasoning_params("qwen/qwen3.8-27b", "low") == {"reasoning_effort": "none", "reasoning_format": "hidden"}
+    assert reasoning_params("qwen/qwen3.8-27b", "medium")["reasoning_effort"] == "medium"
+    assert reasoning_params("some/other-model", "low") == {}
+    assert reasoning_params("openai/gpt-oss-20b", "") == {}
+
+
+def test_reasoning_params_follow_the_slot_on_failover():
+    sent = []
+
+    class Spy(FakeGroq):
+        def _create(self, model, messages, **params):
+            sent.append((model, params.get("reasoning_effort"), params.get("reasoning_format")))
+            return super()._create(model, messages, **params)
+
+    clock = FakeClock()
+    pool = KeyPool(["A"], ["openai/gpt-oss-120b", "qwen/qwen3.8-27b"], clock=clock)
+    script = {("A", "openai/gpt-oss-120b"): [api_error(groq.RateLimitError, 429, "slow down")]}
+    llm = LLMClient(pool, reasoning_effort="low", client_factory=lambda k: Spy(k, script, []),
+                    sleep=clock.sleep, clock=clock)
+    llm.chat(MSG)
+    assert sent == [("openai/gpt-oss-120b", "low", None), ("qwen/qwen3.8-27b", "none", "hidden")]
+    sent.clear()
+    llm.chat(MSG, reasoning_effort="medium")  # per-call override (e.g. a step that needs more thought)
+    assert sent[-1][1] == "medium"

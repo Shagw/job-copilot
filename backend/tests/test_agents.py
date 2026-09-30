@@ -221,11 +221,12 @@ def test_build_result_downgrades_ungrounded_and_fills_skipped():
     result = build_result(job, llm_fit, RESUME)
     by_id = {r.id: r for r in result.requirements}
     assert [r.id for r in result.requirements] == ["M1", "M2", "M3", "M4", "N1", "N2"]
-    assert by_id["M1"].match == "strong"
+    # "5+ years Python": the evidence is real, but the resume shows ~3 years of Python -> code caps it at partial.
+    assert by_id["M1"].match == "partial" and "about 3 years of Python" in by_id["M1"].note
     assert by_id["M3"].match == "missing" and by_id["M3"].evidence is None and by_id["M3"].note == UNVERIFIED_NOTE
     assert by_id["M4"].match == "missing"
     assert by_id["N1"].match == "missing" and by_id["N2"].match == "missing"
-    assert result.score == round(100 * 4 / 10)  # M1 + M2 strong (2+2) out of 4*2 + 2*1
+    assert result.score == round(100 * 3 / 10)  # M1 partial (1) + M2 strong (2) out of 4*2 + 2*1
     assert result.verdict == "Weak fit"
     assert result.gaps == ["Kubernetes", "AWS", "React", "Terraform"]  # musts first
 
@@ -303,21 +304,20 @@ def test_fit_requires_resume(logged_in, use_llm, resume_index):
 def test_fit_end_to_end(logged_in, use_llm, resume_index):
     logged_in.post("/resume", files={"file": ("cv.txt", RESUME.encode(), "text/plain")})
     s = start_session(logged_in, use_llm)
-    llm = use_llm([call("search_my_experience", {"query": "Kubernetes"}, "c1"),
-                   call("search_my_experience", {"query": "Python FastAPI"}, "c2")], FIT_FINAL)
+    llm = use_llm(FIT_FINAL)  # no Jev configured -> exactly ONE Groq call, no agent loop
 
     r = logged_in.post(f"/sessions/{s['id']}/fit")
     assert r.status_code == 200, r.text
     body = r.json()
     fit = body["fit_result"]
-    assert body["current_step"] == "scored"
-    assert fit["score"] == round(100 * (2 + 2 + 1 + 2 + 1) / 10) and fit["verdict"] == "Strong fit"
+    assert body["current_step"] == "scored" and len(llm.calls) == 1
+    # M1 "5+ years Python" is capped at partial by the code years check (resume shows ~3 years).
+    assert fit["score"] == round(100 * (1 + 2 + 1 + 2 + 1) / 10) and fit["verdict"] == "Moderate fit"
     assert fit["gaps"] == ["Terraform"]
-    # Real RAG results from the user's resume were given to the agent.
-    tool_msgs = [m for m in llm.calls[1][0] if m["role"] == "tool"]
-    assert len(tool_msgs) == 2 and "FastAPI" in tool_msgs[0]["content"]
-    assert "same excerpt as shown earlier" in tool_msgs[1]["content"]  # repeats aren't resent
-    # Reasoning trace is saved for the UI.
+    # Code retrieved the user's own resume lines (with ids) and put them in the single prompt.
+    prompt = llm.calls[0][0][1]["content"]
+    assert "Built REST APIs in Python with FastAPI serving 2M requests per day" in prompt and "L1:" in prompt
+    assert llm.calls[0][1]["response_format"] == {"type": "json_object"}
     assert [t["type"] for t in body["agent_trace"]["fit"]] == ["tool", "tool", "final"]
 
 
@@ -345,10 +345,10 @@ def test_rag_search_is_scoped_to_the_current_user(client, outbox, use_llm, resum
     make_user(client, outbox, stay_logged_in=True)
     client.post("/resume", files={"file": ("cv.txt", RESUME.encode(), "text/plain")})
     s = start_session(client, use_llm)
-    llm = use_llm([call("search_my_experience", {"query": "Kubernetes Helm clusters"})], FIT_FINAL)
+    llm = use_llm(FIT_FINAL)
     client.post(f"/sessions/{s['id']}/fit")
-    tool_output = [m for m in llm.calls[1][0] if m["role"] == "tool"][0]["content"]
-    assert "Umbrella" not in tool_output and "Helm" not in tool_output
+    prompt = llm.calls[0][0][1]["content"]  # everything the model saw about the candidate
+    assert "Umbrella" not in prompt and "Helm" not in prompt and "Acme Corp" in prompt
 
 
 def test_other_users_session_is_404(client, outbox, use_llm):
