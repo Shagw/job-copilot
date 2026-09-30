@@ -10,7 +10,7 @@ write a cover letter reviewed by a critic agent. You review and edit every step.
 **Stack:** React + TypeScript (Vite) · FastAPI · SQLite · Groq LLMs · local embeddings (sentence-transformers) +
 ChromaDB · optional TypeSafe Jev for fast judgments · hand-written agent code (no LangChain / CrewAI).
 
-Docs: [Fork guide](docs/FORKING.md) (run your own copy, step by step) · [Architecture](ARCHITECTURE.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md)
+Docs: [User guide](docs/USER_GUIDE.md) (how to use the app) · [Fork guide](docs/FORKING.md) (run your own copy, step by step) · [Architecture](ARCHITECTURE.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md)
 
 ---
 

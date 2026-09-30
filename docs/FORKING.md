@@ -58,7 +58,8 @@ npm install
 npm run dev                                    # app: http://localhost:5173
 ```
 
-Sign up, copy the 6-digit code from terminal 1 (`[DEV EMAIL] ... code=123456`), upload a resume and paste a job.
+Sign up, copy the 6-digit code from terminal 1 (`[DEV EMAIL] ... code=123456`), upload a resume and paste a job. Share the
+[user guide](USER_GUIDE.md) with your users.
 The first upload downloads the ~90 MB embedding model once.
 
 Check that everything works:
